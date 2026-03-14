@@ -1,0 +1,23 @@
+{
+  "name": "daily-news",
+  "version": "0.1.0",
+  "description": "AI 驱动的每日资讯日刊：采集 Twitter → AI 筛选 → 人工复选 → Obsidian + Substack",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "tsx src/generate.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^1.3.22",
+    "@inquirer/prompts": "^7.4.0",
+    "ai": "^4.3.15",
+    "dotenv": "^16.5.0",
+    "openai": "^4.93.0",
+    "substack-api": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
