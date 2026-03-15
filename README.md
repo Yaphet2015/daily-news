@@ -51,7 +51,7 @@ npm run generate
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `TWITTER_PROXY` | 否 | `twitter-cli` 使用的代理，默认 `http://127.0.0.1:6152` |
+| `HTTP_PROXY` | 否 | `twitter-cli` 与 Substack 抓取共用的代理，默认 `http://127.0.0.1:6152` |
 | `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 
@@ -153,7 +153,7 @@ output/YYYY-MM-DD-substack.html
 
 - **按来源增量采集**：`data/state.json` 分别记录 Twitter 与 Substack 的上次运行时间，首次运行默认各自回溯 24 小时
 - **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
-- **Substack 输入**：通过账号 cookies 枚举你 follow 的 publications，抓取新发布文章，按 publication 限流后再全局排序截断
+- **Substack 输入**：通过公开个人页枚举你 follow 的 publications，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认

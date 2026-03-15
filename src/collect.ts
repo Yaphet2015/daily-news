@@ -11,7 +11,7 @@ const MAX_TWEETS = 500;
 const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
-const PROXY = process.env.TWITTER_PROXY ?? 'http://127.0.0.1:6152';
+const DEFAULT_HTTP_PROXY = 'http://127.0.0.1:6152';
 
 interface TwitterCliTweet {
   id: string;
@@ -403,20 +403,44 @@ function resolveFullSubstackPost(preview: SubstackPreviewLike | SubstackPostLike
   return Promise.resolve(preview as SubstackPostLike);
 }
 
+function readProxyEnvValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function resolveHttpProxy(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    readProxyEnvValue(env.HTTP_PROXY) ??
+    readProxyEnvValue(env.http_proxy) ??
+    DEFAULT_HTTP_PROXY
+  );
+}
+
+export function buildSubstackCurlArgs(url: string, proxy: string): string[] {
+  return [
+    '-fsSL',
+    '--compressed',
+    '--connect-timeout',
+    '10',
+    '--max-time',
+    '20',
+    '--proxy',
+    proxy,
+    '-H',
+    'Accept: text/html,application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
+    url,
+  ];
+}
+
+export function buildTwitterCliCommand(listId: string, maxTweets: number, proxy: string): string {
+  return `HTTP_PROXY=${proxy} HTTPS_PROXY=${proxy} twitter list ${listId} --max ${maxTweets} --json`;
+}
+
 async function fetchSubstackText(url: string): Promise<string> {
+  const proxy = resolveHttpProxy();
   const { stdout } = await execFileAsync(
     'curl',
-    [
-      '-fsSL',
-      '--compressed',
-      '--connect-timeout',
-      '10',
-      '--max-time',
-      '20',
-      '-H',
-      'Accept: text/html,application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
-      url,
-    ],
+    buildSubstackCurlArgs(url, proxy),
     { maxBuffer: 20 * 1024 * 1024 },
   );
   return stdout;
@@ -455,10 +479,11 @@ async function fetchPublicationFeed(
 }
 
 async function collectViaCli(listId: string, maxTweets: number): Promise<CollectedItem[]> {
-  console.log(`[collect] 使用 twitter-cli 采集 (proxy: ${PROXY})`);
+  const proxy = resolveHttpProxy();
+  console.log(`[collect] 使用 twitter-cli 采集 (HTTP_PROXY: ${proxy})`);
 
   const { stdout, stderr } = await execAsync(
-    `TWITTER_PROXY=${PROXY} twitter list ${listId} --max ${maxTweets} --json`,
+    buildTwitterCliCommand(listId, maxTweets, proxy),
     { maxBuffer: 50 * 1024 * 1024 },
   );
 

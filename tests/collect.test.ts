@@ -187,6 +187,37 @@ test('parseSubstackFeed extracts recent post metadata from RSS', () => {
   });
 });
 
+test('buildSubstackCurlArgs routes requests through HTTP_PROXY', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).buildSubstackCurlArgs, 'function');
+
+  const buildSubstackCurlArgs = (collectModule as Record<string, Function>).buildSubstackCurlArgs;
+
+  assert.deepEqual(buildSubstackCurlArgs('https://substack.com/@yaphetyan', 'http://127.0.0.1:6152'), [
+    '-fsSL',
+    '--compressed',
+    '--connect-timeout',
+    '10',
+    '--max-time',
+    '20',
+    '--proxy',
+    'http://127.0.0.1:6152',
+    '-H',
+    'Accept: text/html,application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
+    'https://substack.com/@yaphetyan',
+  ]);
+});
+
+test('buildTwitterCliCommand exports HTTP_PROXY for twitter-cli', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).buildTwitterCliCommand, 'function');
+
+  const buildTwitterCliCommand = (collectModule as Record<string, Function>).buildTwitterCliCommand;
+
+  assert.equal(
+    buildTwitterCliCommand('1602502639287435265', 500, 'http://127.0.0.1:6152'),
+    'HTTP_PROXY=http://127.0.0.1:6152 HTTPS_PROXY=http://127.0.0.1:6152 twitter list 1602502639287435265 --max 500 --json',
+  );
+});
+
 test('collectSubstackItems keeps only recent posts and honors global and per-publication caps', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSubstackItems, 'function');
 
