@@ -16,6 +16,16 @@ function collectAllTags(items: CuratedItem[]): string[] {
   return Array.from(tagSet);
 }
 
+function getPhotoUrls(item: CuratedItem): string[] {
+  return item.media
+    .filter((media) => media.type === 'photo')
+    .map((media) => media.url);
+}
+
+function getAttribution(item: CuratedItem): string {
+  return item.attribution;
+}
+
 function formatObsidian(items: CuratedItem[], date: string): string {
   const tags = collectAllTags(items);
   const tagList = ['daily-news', ...tags].join(', ');
@@ -24,18 +34,18 @@ function formatObsidian(items: CuratedItem[], date: string): string {
   const heading = `# AI 日刊 · ${date}\n`;
 
   const body = items
-    .map((item, i) => {
-      const num = i + 1;
+    .map((item, index) => {
       const tagsStr = item.tags.length > 0 ? `\`${item.tags.join('` `')}\`` : '';
-      return [
-        `## ${num}. ${item.title}`,
+      const photoLines = getPhotoUrls(item).map((url) => `![${item.title}](${url})`);
+      const lines = [
+        `## ${index + 1}. ${item.title}`,
         tagsStr ? `${tagsStr}\n` : '',
         `> ${item.summary}`,
-        ``,
-        `来源：[@${item.author}](${item.url})`,
-      ]
-        .filter((line) => line !== undefined)
-        .join('\n');
+        ...photoLines,
+        '',
+        `来源：[${getAttribution(item)}](${item.url})`,
+      ].filter((line) => line !== undefined);
+      return lines.join('\n');
     })
     .join('\n\n---\n\n');
 
@@ -49,13 +59,18 @@ function formatSubstack(items: CuratedItem[], date: string): string {
     .map((item) => {
       const tagsHtml =
         item.tags.length > 0
-          ? `<p><small>${item.tags.map((t) => `<code>${t}</code>`).join(' ')}</small></p>`
+          ? `<p><small>${item.tags.map((tag) => `<code>${tag}</code>`).join(' ')}</small></p>`
           : '';
+      const photoHtml = getPhotoUrls(item)
+        .map((url) => `<img src="${url}" alt="${item.title}" />`)
+        .join('\n');
+
       return [
         `<h2>${item.title}</h2>`,
         tagsHtml,
         `<p>${item.summary}</p>`,
-        `<p>来源：<a href="${item.url}" target="_blank">@${item.author}</a></p>`,
+        photoHtml,
+        `<p>来源：<a href="${item.url}" target="_blank">${getAttribution(item)}</a></p>`,
       ]
         .filter(Boolean)
         .join('\n');

@@ -10,27 +10,21 @@ async function main(): Promise<void> {
   console.log('  daily-news  AI 日刊生成器');
   console.log('═══════════════════════════════════════════════════════════\n');
 
-  // Step 1: Collect tweets
-  const tweets = await collect();
-  if (tweets.length === 0) {
-    console.log('没有采集到新推文，本次运行结束。');
+  const collectedItems = await collect();
+  if (collectedItems.length === 0) {
+    console.log('没有采集到新内容，本次运行结束。');
     process.exit(0);
   }
 
-  // Step 2: AI curation
-  const curated = await curate(tweets);
-  if (curated.length === 0) {
+  const curatedItems = await curate(collectedItems);
+  if (curatedItems.length === 0) {
     console.log('AI 未整理出任何资讯，本次运行结束。');
     process.exit(0);
   }
 
-  // Step 3: Manual selection
-  const selected = await select(curated);
+  const selectedItems = await select(curatedItems);
+  const formatted = format(selectedItems);
 
-  // Step 4: Format
-  const formatted = format(selected);
-
-  // Step 5: Publish
   await publish(formatted);
 
   console.log('\n✅  全部完成！');

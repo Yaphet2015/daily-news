@@ -1,9 +1,45 @@
-export interface RawTweet {
-  id: string;
-  text: string;
-  author: { name: string; username: string };
-  createdAt: string;
+export type SourceName = 'twitter' | 'substack';
+
+export interface MediaAsset {
+  type: string;
   url: string;
+  width?: number;
+  height?: number;
+}
+
+export interface ReaderBrief {
+  summary: string;
+  keyPoints: string[];
+  claims: string[];
+  whyItMatters: string;
+  signals: string[];
+  caveats: string[];
+}
+
+export interface CollectedAuthor {
+  name: string;
+  username?: string;
+}
+
+export interface PublicationRef {
+  name: string;
+  handle?: string;
+  url?: string;
+}
+
+export interface CollectedItem {
+  id: string;
+  source: SourceName;
+  url: string;
+  publishedAt: string;
+  author: CollectedAuthor;
+  publication?: PublicationRef;
+  title?: string;
+  subtitle?: string | null;
+  text: string;
+  body?: string;
+  media: MediaAsset[];
+  readerBrief?: ReaderBrief;
 }
 
 export interface CuratedItem {
@@ -11,7 +47,10 @@ export interface CuratedItem {
   summary: string;
   url: string;
   author: string;
+  attribution: string;
+  source: SourceName;
   tags: string[];
+  media: MediaAsset[];
 }
 
 export interface FormatResult {
@@ -20,6 +59,13 @@ export interface FormatResult {
   date: string;
 }
 
+export interface SourceRunState {
+  lastRunTime: number;
+}
+
 export interface RunState {
-  lastRunTime: number; // Unix timestamp in seconds
+  sources: {
+    twitter: SourceRunState;
+    substack: SourceRunState;
+  };
 }

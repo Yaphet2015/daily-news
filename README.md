@@ -1,17 +1,18 @@
 # daily-news
 
-AI 驱动的每日资讯日刊系统。一条命令完成：Twitter 采集 → AI 筛选 → 人工复选 → Obsidian 备份 + Substack 草稿。
+AI 驱动的每日资讯日刊系统。一条命令完成：Twitter / Substack 采集 → AI 筛选 → 人工复选 → Obsidian 备份 + Substack 草稿。
 
 ## 工作流程
 
 ```
 npm run generate
     │
-    ├─ 1. 采集  → 从 twitterapi.io 拉取 Twitter 列表增量推文（上限 500 条）
-    ├─ 2. 整理  → AI 筛选并归纳为 30+ 条结构化资讯
-    ├─ 3. 复选  → 终端交互，人工勾选 6-10 条
-    ├─ 4. 格式化 → 生成 Obsidian Markdown + Substack HTML
-    └─ 5. 发布  → 保存到 Obsidian Vault / output/ 目录
+    ├─ 1. 采集  → 拉取 Twitter 列表 + 已订阅 Substack publication 新文章
+    ├─ 2. 预读  → 用额外的快模型读完 Substack 全文并压缩成 briefing
+    ├─ 3. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 30+ 条结构化资讯
+    ├─ 4. 复选  → 终端交互，人工勾选 6-10 条
+    ├─ 5. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
+    └─ 6. 发布  → 保存到 Obsidian Vault / output/ 目录
 ```
 
 ## 快速开始
@@ -28,7 +29,7 @@ npm install
 cp .env.example .env
 ```
 
-用编辑器打开 `.env`，按注释填写各项配置（至少填写 `TWITTERAPI_KEY` 和 AI 密钥）。
+用编辑器打开 `.env`，按注释填写各项配置。若启用 `substack` 来源，至少需要填写 `SUBSTACK_PUBLICATION_URL`。
 
 ### 3. 运行
 
@@ -40,11 +41,18 @@ npm run generate
 
 ## 环境变量说明
 
+### 启用来源
+
+| 变量 | 说明 |
+|------|------|
+| `ENABLED_SOURCES` | 逗号分隔，可选 `twitter`、`substack` |
+
 ### Twitter 采集
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `TWITTERAPI_KEY` | ✅ | twitterapi.io API Key |
+| `TWITTER_PROXY` | 否 | `twitter-cli` 使用的代理，默认 `http://127.0.0.1:6152` |
+| `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 
 **获取 twitterapi.io API Key：**
@@ -60,6 +68,7 @@ npm run generate
 |------|------|
 | `OPENAI_API_KEY` | OpenAI API Key |
 | `OPENAI_MODEL` | 模型名，默认 `gpt-4o` |
+| `SUBSTACK_READER_MODEL` | Substack 全文预读模型，默认 `gpt-4o-mini` |
 
 **备用路径 — 第三方 API 聚合商：**
 
@@ -83,11 +92,11 @@ npm run generate
 
 | 变量 | 说明 |
 |------|------|
-| `SUBSTACK_SID` | `substack.sid` Cookie 值（见下方获取步骤） |
-| `SUBSTACK_CONNECT_SID` | `connect.sid` Cookie 值 |
-| `SUBSTACK_PUBLICATION_URL` | 你的发布地址，如 `https://yourname.substack.com` |
+| `SUBSTACK_PUBLICATION_URL` | 你的 Substack 发布地址，如 `https://yourname.substack.com`。程序会从对应公开个人页读取你 follow 的 publications |
+| `SUBSTACK_SOURCE_MAX_POSTS` | 每次最多纳入多少篇新文章，默认 `40` |
+| `SUBSTACK_SOURCE_MAX_POSTS_PER_PUBLICATION` | 每个 publication 每次最多纳入多少篇文章，默认 `2` |
 
-> 注意：当前版本 Substack 相关变量预留，Substack 草稿通过本地 HTML 文件方式输出，见「发布到 Substack」章节。
+> 说明：当前版本同时支持 Substack 输入与输出。输入会读取你的公开个人页中展示的 followed publications，再抓取这些 publication 的公开 RSS feed。也就是说，这条路径只覆盖公开文章，不依赖 `substack.sid` / `connect.sid` Cookie。
 
 ---
 
@@ -113,14 +122,11 @@ output/YYYY-MM-DD-substack.html
 2. 参考 `output/` 文件，逐条粘贴标题和摘要
 3. 为每条资讯添加原文链接
 
-### 获取 Substack Cookie（备用）
+### Substack 输入限制
 
-如需通过 API 操作：
-
-1. 在浏览器登录 [https://substack.com](https://substack.com)
-2. 打开开发者工具（`F12` 或 `Cmd+Option+I`）
-3. 切换到 **Application** 标签 → **Cookies** → `https://substack.com`
-4. 找到 `substack.sid` 和 `connect.sid`，复制各自的 **Value** 填入 `.env`
+1. 只会读取你公开个人页里可见的 followed publications
+2. 只会抓取这些 publication 的公开 RSS 内容
+3. 付费、私有、仅订阅者可见的文章不会被这条采集路径纳入
 
 ---
 
@@ -134,11 +140,24 @@ output/YYYY-MM-DD-substack.html
 
 ---
 
+## 媒体处理
+
+- 采集阶段会尽量保留来源中的媒体元数据（图片、视频、GIF 的类型、URL、尺寸）
+- Substack 来源当前只提取封面图为 `photo`
+- AI 整理阶段只接收媒体元数据，不直接看图片本身；Substack 正文会先交给一个快模型读完并压缩成 briefing，再交给主整理模型
+- 发布阶段当前只渲染图片（`photo`）；视频和 GIF 会保留在内部数据中，但不会嵌入 Obsidian / Substack 输出
+
+---
+
 ## 运行原理
 
-- **增量采集**：`data/state.json` 记录上次运行的 Unix 时间戳，下次运行只拉取该时间点之后的新推文，首次运行默认回溯 24 小时
+- **按来源增量采集**：`data/state.json` 分别记录 Twitter 与 Substack 的上次运行时间，首次运行默认各自回溯 24 小时
+- **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
+- **Substack 输入**：通过账号 cookies 枚举你 follow 的 publications，抓取新发布文章，按 publication 限流后再全局排序截断
+- **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认
+- **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
 
 ---
 
@@ -148,8 +167,8 @@ output/YYYY-MM-DD-substack.html
 daily-news/
 ├── src/
 │   ├── generate.ts    # 主入口，串联五步 pipeline
-│   ├── collect.ts     # twitterapi.io 推文采集
-│   ├── curate.ts      # AI 整理（OpenAI / ai-sdk）
+│   ├── collect.ts     # Twitter / Substack 采集、归一化与来源级增量状态
+│   ├── curate.ts      # Substack 全文预读 + 主整理模型（OpenAI / ai-sdk）
 │   ├── select.ts      # 交互式人工复选
 │   ├── format.ts      # Obsidian + Substack 格式化
 │   ├── publish.ts     # 输出保存
