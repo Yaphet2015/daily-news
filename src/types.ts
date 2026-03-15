@@ -1,4 +1,5 @@
 export type SourceName = 'twitter' | 'substack';
+export type NewsCategory = 'Product' | 'Tutorial' | 'Opinions/Thoughts';
 
 export interface MediaAsset {
   type: string;
@@ -49,7 +50,7 @@ export interface CuratedItem {
   author: string;
   attribution: string;
   source: SourceName;
-  tags: string[];
+  category: NewsCategory;
   media: MediaAsset[];
 }
 

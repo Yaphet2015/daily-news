@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
-import type { CollectedItem, CuratedItem, MediaAsset, ReaderBrief } from './types.js';
+import type { CollectedItem, CuratedItem, MediaAsset, NewsCategory, ReaderBrief } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT_PATH = join(__dirname, '..', 'prompts', 'curator.md');
@@ -15,7 +15,7 @@ interface LlmCuratedItem {
   summary: string;
   url: string;
   author: string;
-  tags: string[];
+  category: NewsCategory;
 }
 
 interface CurateResponse {
@@ -23,6 +23,7 @@ interface CurateResponse {
 }
 
 type ReaderFn = (item: CollectedItem) => Promise<ReaderBrief>;
+const VALID_CATEGORIES: NewsCategory[] = ['Product', 'Tutorial', 'Opinions/Thoughts'];
 
 function parseJson<T>(raw: string): T {
   const cleaned = raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
@@ -139,7 +140,14 @@ async function readSubstackArticle(item: CollectedItem): Promise<ReaderBrief> {
 function parseCurateResponse(raw: string): LlmCuratedItem[] {
   const parsed = parseJson<CurateResponse>(raw);
   if (!Array.isArray(parsed.items)) throw new Error('AI 响应缺少 items 字段');
-  return parsed.items;
+
+  return parsed.items.map((item) => {
+    if (!VALID_CATEGORIES.includes(item.category)) {
+      throw new Error(`AI 响应包含无效分类: ${item.category}`);
+    }
+
+    return item;
+  });
 }
 
 export function parseReaderBrief(raw: string): ReaderBrief {

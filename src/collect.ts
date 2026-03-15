@@ -480,7 +480,7 @@ async function fetchPublicationFeed(
 
 async function collectViaCli(listId: string, maxTweets: number): Promise<CollectedItem[]> {
   const proxy = resolveHttpProxy();
-  console.log(`[collect] 使用 twitter-cli 采集 (HTTP_PROXY: ${proxy})`);
+  console.log(`[collect] 使用 twitter-cli 采集`);
 
   const { stdout, stderr } = await execAsync(
     buildTwitterCliCommand(listId, maxTweets, proxy),

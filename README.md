@@ -9,7 +9,7 @@ npm run generate
     │
     ├─ 1. 采集  → 拉取 Twitter 列表 + 已订阅 Substack publication 新文章
     ├─ 2. 预读  → 用额外的快模型读完 Substack 全文并压缩成 briefing
-    ├─ 3. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 30+ 条结构化资讯
+    ├─ 3. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 30+ 条结构化资讯，按 Product / Tutorial / Opinions/Thoughts 分组
     ├─ 4. 复选  → 终端交互，人工勾选 6-10 条
     ├─ 5. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
     └─ 6. 发布  → 保存到 Obsidian Vault / output/ 目录
@@ -158,6 +158,7 @@ output/YYYY-MM-DD-substack.html
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
+- **固定分组**：发布输出按 `Product`、`Tutorial`、`Opinions/Thoughts` 三组组织，不再展示条目标签
 
 ---
 
@@ -175,7 +176,7 @@ daily-news/
 │   ├── state.ts       # 状态持久化
 │   └── types.ts       # 共享类型定义
 ├── prompts/
-│   └── curator.md     # AI curation prompt 模板
+│   └── curator.md     # AI curation prompt 模板（固定三分类）
 ├── data/
 │   └── state.json     # 运行状态（自动生成）
 ├── output/            # 生成的 Substack HTML

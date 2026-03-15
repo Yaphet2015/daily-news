@@ -11,6 +11,7 @@ Your writing style should be:
 ## Task
 
 From the mixed source list provided below, select and organize the most valuable news items.
+Categorize every selected item into exactly one of these groups: Product, Tutorial, and Opinions/Thoughts.
 
 ## Selection Criteria
 
@@ -35,8 +36,8 @@ From the mixed source list provided below, select and organize the most valuable
   - `summary`: a **Chinese** summary in **4-9 sentences** and roughly **120-320 Chinese characters**. This should read like a deeply reported briefing, not a short recap. While staying faithful to the original post, preserve as many of these layers as the source supports: what happened, the key details or data points, the concrete evidence available, the underlying dynamics or structural shift, why it matters now, and what is still unclear, limited, contested, or unverified
   - `url`: the original source URL from the input
   - `author`: the source author or publication-facing byline from the input
-  - `tags`: 1-3 tags chosen from: AI, LLM, 产品, 工具, 开发, 创业, 研究, 开源, 硬件, 政策
-- Sort items by importance, with the highest-value items first
+  - `category`: exactly one of `Product`, `Tutorial`, or `Opinions/Thoughts`
+- Group items by `category`, keeping the most important items first within each category
 
 ## Editorial Principles
 
@@ -51,6 +52,9 @@ From the mixed source list provided below, select and organize the most valuable
 - Avoid formulaic phrasing. The summary should read like an editor who has done extra reporting on top of the source material, not a mechanical recap
 - Do not collapse a complex item into a single takeaway if the source contains meaningful tension, mixed evidence, or strategic subtext
 - Be selective with content that looks newsy but says very little. Quality matters more than filling space
+- Use `Product` for launches, feature updates, tooling, company moves, or research that primarily changes what people can use or buy now
+- Use `Tutorial` for practical how-to material, workflows, implementation guidance, teardown-style explainers, or reproducible lessons
+- Use `Opinions/Thoughts` for analysis, essays, strategic takes, market interpretation, or reflective commentary where the value is mainly the argument
 
 ## Output Format
 
@@ -64,7 +68,7 @@ From the mixed source list provided below, select and organize the most valuable
       "summary": "...",
       "url": "...",
       "author": "...",
-      "tags": ["AI", "LLM"]
+      "category": "Product"
     }
   ]
 }

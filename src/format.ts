@@ -1,4 +1,6 @@
-import type { CuratedItem, FormatResult } from './types.js';
+import type { CuratedItem, FormatResult, NewsCategory } from './types.js';
+
+const CATEGORY_ORDER: NewsCategory[] = ['Product', 'Tutorial', 'Opinions/Thoughts'];
 
 function getDateString(): string {
   const now = new Date();
@@ -6,14 +8,6 @@ function getDateString(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
-}
-
-function collectAllTags(items: CuratedItem[]): string[] {
-  const tagSet = new Set<string>();
-  for (const item of items) {
-    for (const tag of item.tags) tagSet.add(tag);
-  }
-  return Array.from(tagSet);
 }
 
 function getPhotoUrls(item: CuratedItem): string[] {
@@ -26,28 +20,38 @@ function getAttribution(item: CuratedItem): string {
   return item.attribution;
 }
 
-function formatObsidian(items: CuratedItem[], date: string): string {
-  const tags = collectAllTags(items);
-  const tagList = ['daily-news', ...tags].join(', ');
+function groupItems(items: CuratedItem[]): Array<{ category: NewsCategory; items: CuratedItem[] }> {
+  return CATEGORY_ORDER
+    .map((category) => ({
+      category,
+      items: items.filter((item) => item.category === category),
+    }))
+    .filter((group) => group.items.length > 0);
+}
 
-  const frontmatter = `---\ndate: ${date}\ntags: [${tagList}]\n---\n`;
+function formatObsidian(items: CuratedItem[], date: string): string {
+  const frontmatter = `---\ndate: ${date}\ntags: [daily-news]\n---\n`;
   const heading = `# AI 日刊 · ${date}\n`;
 
-  const body = items
-    .map((item, index) => {
-      const tagsStr = item.tags.length > 0 ? `\`${item.tags.join('` `')}\`` : '';
-      const photoLines = getPhotoUrls(item).map((url) => `![${item.title}](${url})`);
-      const lines = [
-        `## ${index + 1}. ${item.title}`,
-        tagsStr ? `${tagsStr}\n` : '',
-        `> ${item.summary}`,
-        ...photoLines,
-        '',
-        `来源：[${getAttribution(item)}](${item.url})`,
-      ].filter((line) => line !== undefined);
-      return lines.join('\n');
+  const body = groupItems(items)
+    .map(({ category, items: groupItems }) => {
+      const section = groupItems
+        .map((item, index) => {
+          const photoLines = getPhotoUrls(item).map((url) => `![${item.title}](${url})`);
+          const lines = [
+            `### ${index + 1}. ${item.title}`,
+            `> ${item.summary}`,
+            ...photoLines,
+            '',
+            `来源：[${getAttribution(item)}](${item.url})`,
+          ].filter((line) => line !== undefined);
+          return lines.join('\n');
+        })
+        .join('\n\n---\n\n');
+
+      return `## ${category}\n\n${section}`;
     })
-    .join('\n\n---\n\n');
+    .join('\n\n');
 
   return `${frontmatter}\n${heading}\n${body}\n`;
 }
@@ -55,27 +59,28 @@ function formatObsidian(items: CuratedItem[], date: string): string {
 function formatSubstack(items: CuratedItem[], date: string): string {
   const header = `<h1>AI 日刊 · ${date}</h1>\n`;
 
-  const body = items
-    .map((item) => {
-      const tagsHtml =
-        item.tags.length > 0
-          ? `<p><small>${item.tags.map((tag) => `<code>${tag}</code>`).join(' ')}</small></p>`
-          : '';
-      const photoHtml = getPhotoUrls(item)
-        .map((url) => `<img src="${url}" alt="${item.title}" />`)
-        .join('\n');
+  const body = groupItems(items)
+    .map(({ category, items: groupItems }) => {
+      const section = groupItems
+        .map((item) => {
+          const photoHtml = getPhotoUrls(item)
+            .map((url) => `<img src="${url}" alt="${item.title}" />`)
+            .join('\n');
 
-      return [
-        `<h2>${item.title}</h2>`,
-        tagsHtml,
-        `<p>${item.summary}</p>`,
-        photoHtml,
-        `<p>来源：<a href="${item.url}" target="_blank">${getAttribution(item)}</a></p>`,
-      ]
-        .filter(Boolean)
-        .join('\n');
+          return [
+            `<h3>${item.title}</h3>`,
+            `<p>${item.summary}</p>`,
+            photoHtml,
+            `<p>来源：<a href="${item.url}" target="_blank">${getAttribution(item)}</a></p>`,
+          ]
+            .filter(Boolean)
+            .join('\n');
+        })
+        .join('\n<hr />\n\n');
+
+      return `<h2>${category}</h2>\n${section}`;
     })
-    .join('\n<hr />\n\n');
+    .join('\n\n');
 
   return `${header}\n${body}\n`;
 }

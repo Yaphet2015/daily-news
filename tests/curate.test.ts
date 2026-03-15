@@ -145,14 +145,14 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       summary: 'Summary',
       url: 'https://example.substack.com/p/article',
       author: 'ignored',
-      tags: ['AI'],
+      category: 'Product',
     },
     {
       title: 'Missing',
       summary: 'Missing summary',
       url: 'https://x.com/missing/status/9',
       author: 'missing',
-      tags: ['工具'],
+      category: 'Tutorial',
     },
   ];
 
@@ -181,7 +181,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       summary: 'Summary',
       url: 'https://example.substack.com/p/article',
       author: 'Ben Thompson',
-      tags: ['AI'],
+      category: 'Product',
       source: 'substack',
       attribution: 'Stratechery / Ben Thompson',
       media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
@@ -191,7 +191,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       summary: 'Missing summary',
       url: 'https://x.com/missing/status/9',
       author: 'missing',
-      tags: ['工具'],
+      category: 'Tutorial',
       source: 'twitter',
       attribution: '@missing',
       media: [],
@@ -199,10 +199,13 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
   ]);
 });
 
-test('curator prompt requires materially longer investigative summaries', () => {
+test('curator prompt requires materially longer investigative summaries and fixed categories', () => {
   const prompt = readFileSync(new URL('../prompts/curator.md', import.meta.url), 'utf-8');
 
   assert.match(prompt, /4-9 sentences|120-320 Chinese characters/);
   assert.doesNotMatch(prompt, /2-4 sentences/);
   assert.match(prompt, /underlying dynamics|structural shift|second-order implications|what is still unclear/i);
+  assert.match(prompt, /Product, Tutorial, and Opinions\/Thoughts/);
+  assert.match(prompt, /`category`/);
+  assert.doesNotMatch(prompt, /`tags`/);
 });
