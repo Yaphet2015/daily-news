@@ -7,7 +7,7 @@ import { publish } from './publish.js';
 
 async function main(): Promise<void> {
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('  daily-news  AI 日刊生成器');
+  console.log(' AI daily-news');
   console.log('═══════════════════════════════════════════════════════════\n');
 
   const collectedItems = await collect();
