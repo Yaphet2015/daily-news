@@ -181,16 +181,25 @@ export function parseReaderBrief(raw: string): ReaderBrief {
 export async function attachReaderBriefs(
   items: CollectedItem[],
   reader: ReaderFn = readSubstackArticle,
+  concurrency = 10,
 ): Promise<CollectedItem[]> {
-  return Promise.all(
-    items.map(async (item) => {
-      if (item.source !== 'substack') return item;
-      return {
-        ...item,
-        readerBrief: await reader(item),
-      };
-    }),
-  );
+  const results: CollectedItem[] = new Array(items.length);
+
+  // Process in sliding window of `concurrency` to avoid overwhelming AI_BASE_URL
+  let index = 0;
+  async function runNext(): Promise<void> {
+    const i = index++;
+    if (i >= items.length) return;
+    const item = items[i];
+    results[i] =
+      item.source === 'substack'
+        ? { ...item, readerBrief: await reader(item) }
+        : item;
+    await runNext();
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, runNext));
+  return results;
 }
 
 export function buildCollectedItemsPayload(items: CollectedItem[]): string {
