@@ -150,29 +150,42 @@ function parseCurateResponse(raw: string): LlmCuratedItem[] {
   });
 }
 
+// Accepts a plain string or an array of strings (AI sometimes returns arrays).
+const normalizeString = (v: unknown): string | null =>
+  Array.isArray(v)
+    ? (v as unknown[]).every((x) => typeof x === 'string') ? (v as string[]).join(' ') : null
+    : typeof v === 'string' ? v : null;
+
 export function parseReaderBrief(raw: string): ReaderBrief {
   const parsed = parseJson<Record<string, unknown>>(raw);
+  const summary = normalizeString(parsed.summary);
+  const whyItMatters = normalizeString(parsed.whyItMatters);
   const keyPoints = validateStringArray(parsed.keyPoints);
   const claims = validateStringArray(parsed.claims);
   const signals = validateStringArray(parsed.signals);
   const caveats = validateStringArray(parsed.caveats);
 
   if (
-    typeof parsed.summary !== 'string' ||
-    typeof parsed.whyItMatters !== 'string' ||
+    !summary ||
+    !whyItMatters ||
     !keyPoints ||
     !claims ||
     !signals ||
     !caveats
   ) {
+    console.error(`❌ || parseReaderBrief error, parsed: `, JSON.stringify(parsed, null, 2));
+    console.error(`❌ || keyPoints`, keyPoints);
+    console.error(`❌ || claims`, claims);
+    console.error(`❌ || signals`, signals);
+    console.error(`❌ || caveats`, caveats);
     throw new Error('Invalid reader brief response');
   }
 
   return {
-    summary: parsed.summary,
+    summary,
     keyPoints,
     claims,
-    whyItMatters: parsed.whyItMatters,
+    whyItMatters,
     signals,
     caveats,
   };
