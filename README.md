@@ -51,7 +51,7 @@ npm run generate
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `HTTP_PROXY` | 否 | `twitter-cli` 与 Substack 抓取共用的代理，默认 `http://127.0.0.1:6152` |
+| `HTTP_PROXY` | 否 | `twitter-cli` 与 Substack 抓取共用的代理，为空时使用系统代理` |
 | `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 
