@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
-import type { CollectedItem, CuratedItem, MediaAsset, NewsCategory, ReaderBrief } from './types.js';
+import type { CollectedItem, CuratedItem, MediaAsset, NewsCategory, RankedItem, ReaderBrief } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT_PATH = join(__dirname, '..', 'prompts', 'curator.md');
@@ -16,6 +16,7 @@ interface LlmCuratedItem {
   url: string;
   author: string;
   category: NewsCategory;
+  editorialReason: string;
 }
 
 interface CurateResponse {
@@ -24,10 +25,34 @@ interface CurateResponse {
 
 type ReaderFn = (item: CollectedItem) => Promise<ReaderBrief>;
 const VALID_CATEGORIES: NewsCategory[] = ['Product', 'Tutorial', 'Opinions/Thoughts'];
+const CURATED_ITEM_SOFT_FLOOR = 40;
+
+function isRankedItem(item: CollectedItem): item is RankedItem {
+  return (
+    'priorityScore' in item &&
+    typeof item.priorityScore === 'number' &&
+    'editorialScore' in item &&
+    typeof item.editorialScore === 'number' &&
+    'engagementScore' in item &&
+    typeof item.engagementScore === 'number' &&
+    'decisionReasons' in item &&
+    Array.isArray(item.decisionReasons)
+  );
+}
 
 function parseJson<T>(raw: string): T {
   const cleaned = raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
   return JSON.parse(cleaned) as T;
+}
+
+export function warnOnUnderfilledCuratedItems(
+  itemCount: number,
+  warn: (message: string) => void = console.warn,
+): void {
+  if (itemCount >= CURATED_ITEM_SOFT_FLOOR) return;
+  warn(
+    `[curate] AI 仅整理出 ${itemCount} 条资讯，低于软下限 ${CURATED_ITEM_SOFT_FLOOR}；本次不会回填低优先级条目。`,
+  );
 }
 
 function validateStringArray(value: unknown): string[] | null {
@@ -218,6 +243,15 @@ export async function attachReaderBriefs(
 export function buildCollectedItemsPayload(items: CollectedItem[]): string {
   return items
     .map((item, index) => {
+      const rankingLines = isRankedItem(item)
+        ? [
+            `Priority Score: ${item.priorityScore}`,
+            `Editorial Score: ${item.editorialScore}`,
+            `Engagement Score: ${item.engagementScore}`,
+            `Decision Reasons: ${item.decisionReasons.join(', ') || 'none'}`,
+          ]
+        : [];
+
       if (item.source === 'substack') {
         return [
           `[${index + 1}] Source: substack`,
@@ -227,6 +261,7 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
           `Title: ${item.title ?? 'Untitled'}`,
           `Subtitle: ${item.subtitle ?? 'None'}`,
           `URL: ${item.url}`,
+          ...rankingLines,
           item.readerBrief ? formatReaderBrief(item.readerBrief) : `Excerpt: ${item.text}`,
           formatMediaForPrompt(item.media),
         ].join('\n');
@@ -238,6 +273,7 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
         `Time: ${item.publishedAt}`,
         `Content: ${item.text}`,
         `URL: ${item.url}`,
+        ...rankingLines,
         formatMediaForPrompt(item.media),
       ].join('\n');
     })
@@ -254,13 +290,24 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
       sourceItem?.author.name ??
       item.author;
 
-    return {
+    const curatedItem: CuratedItem = {
       ...item,
       author,
       source: sourceItem?.source ?? 'twitter',
       attribution: sourceItem ? getAttribution(sourceItem) : `@${item.author}`,
       media: sourceItem?.media ?? [],
     };
+
+    if (sourceItem && isRankedItem(sourceItem)) {
+      curatedItem.priorityScore = sourceItem.priorityScore;
+      curatedItem.decisionReasons = sourceItem.decisionReasons;
+    }
+
+    if (item.editorialReason) {
+      curatedItem.editorialReason = item.editorialReason;
+    }
+
+    return curatedItem;
   });
 }
 
@@ -288,6 +335,7 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
   console.log('[curate] 预处理 Substack 文章并调用主整理模型...');
   const llmItems = await curateWithModel(systemPrompt, userContent);
   const curatedItems = enrichCuratedItems(llmItems, enrichedItems);
+  warnOnUnderfilledCuratedItems(curatedItems.length);
 
   console.log(`[curate] AI 整理完成，共 ${curatedItems.length} 条资讯`);
   return curatedItems;

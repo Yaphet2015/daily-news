@@ -41,6 +41,29 @@ test('mapTwitterCliTweet preserves mixed media from twitter-cli', () => {
   ]);
 });
 
+test('mapTwitterCliTweet preserves optional engagement metrics', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: '2b',
+    text: 'metrics',
+    author: {
+      id: 'u2b',
+      name: 'Bob',
+      screenName: 'bob',
+    },
+    createdAt: '2026-03-15T00:00:00Z',
+    media: [],
+    likeCount: 11,
+    replyCount: 3,
+    repostCount: 5,
+    quoteCount: 2,
+  } as never);
+
+  assert.equal(tweet.likeCount, 11);
+  assert.equal(tweet.replyCount, 3);
+  assert.equal(tweet.repostCount, 5);
+  assert.equal(tweet.quoteCount, 2);
+});
+
 test('mapTwitterApiTweet extracts photo media when fallback payload includes it', () => {
   const tweet = collectModule.mapTwitterApiTweet({
     id: '3',
@@ -74,6 +97,27 @@ test('mapTwitterApiTweet degrades to empty media when fallback payload has none'
   });
 
   assert.deepEqual(tweet.media, []);
+});
+
+test('mapTwitterApiTweet preserves optional engagement metrics', () => {
+  const tweet = collectModule.mapTwitterApiTweet({
+    id: '4b',
+    text: 'metrics',
+    author: {
+      name: 'Dana',
+      userName: 'dana',
+    },
+    createdAt: '2026-03-15T00:00:00Z',
+    favorite_count: 21,
+    reply_count: 4,
+    retweet_count: 7,
+    quote_count: 3,
+  } as never);
+
+  assert.equal(tweet.likeCount, 21);
+  assert.equal(tweet.replyCount, 4);
+  assert.equal(tweet.repostCount, 7);
+  assert.equal(tweet.quoteCount, 3);
 });
 
 test('mapSubstackPost preserves full body, source metadata, and cover image', () => {

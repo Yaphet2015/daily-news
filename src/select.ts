@@ -5,8 +5,21 @@ export function formatSelectionLabel(item: CuratedItem, index: number): string {
   const preview = item.summary.length > 70
     ? item.summary.slice(0, 70) + '…'
     : item.summary;
+  const metadata = `${item.source} · ${item.attribution} · ${item.author}`;
+  const rankingHint =
+    typeof item.priorityScore === 'number'
+      ? `score ${item.priorityScore}` +
+        (item.decisionReasons?.length ? ` · ${item.decisionReasons.join(', ')}` : '')
+      : null;
 
-  return `${String(index + 1).padStart(2, ' ')}. ${item.title}\n      ${preview}`;
+  return [
+    `${String(index + 1).padStart(2, ' ')}. ${item.title}`,
+    `      ${metadata}`,
+    rankingHint ? `      ${rankingHint}` : null,
+    `      ${preview}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export async function select(items: CuratedItem[]): Promise<CuratedItem[]> {

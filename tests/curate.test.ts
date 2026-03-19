@@ -36,6 +36,41 @@ test('buildCollectedItemsPayload includes media metadata for Twitter items', () 
   assert.match(payload, /Media: none/);
 });
 
+test('buildCollectedItemsPayload includes ranking metadata when present', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).buildCollectedItemsPayload, 'function');
+
+  const buildCollectedItemsPayload = (curateModule as Record<string, Function>).buildCollectedItemsPayload;
+  const payload = buildCollectedItemsPayload([
+    {
+      id: '1',
+      source: 'twitter',
+      text: 'launch',
+      author: { name: 'Alice', username: 'alice' },
+      publishedAt: '2026-03-15T00:00:00Z',
+      url: 'https://x.com/alice/status/1',
+      media: [],
+      editorialScore: 78,
+      engagementScore: 15,
+      priorityScore: 62,
+      decisionReasons: ['high_substance', 'strong_evidence'],
+      scoreBreakdown: {
+        substance: 24,
+        evidence: 16,
+        sourceSignal: 6,
+        freshness: 9,
+        novelty: 15,
+        actionability: 0,
+        penalties: 0,
+      },
+    },
+  ]);
+
+  assert.match(payload, /Priority Score: 62/);
+  assert.match(payload, /Editorial Score: 78/);
+  assert.match(payload, /Engagement Score: 15/);
+  assert.match(payload, /Decision Reasons: high_substance, strong_evidence/);
+});
+
 test('attachReaderBriefs only invokes the reader for Substack items', async () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).attachReaderBriefs, 'function');
 
@@ -169,6 +204,19 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
         handle: 'stratechery',
         url: 'https://stratechery.com',
       },
+      editorialScore: 77,
+      engagementScore: 0,
+      priorityScore: 58,
+      decisionReasons: ['high_substance', 'strong_evidence'],
+      scoreBreakdown: {
+        substance: 24,
+        evidence: 14,
+        sourceSignal: 8,
+        freshness: 9,
+        novelty: 15,
+        actionability: 7,
+        penalties: 0,
+      },
       publishedAt: '2026-03-15T08:00:00Z',
       url: 'https://example.substack.com/p/article',
       media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
@@ -185,6 +233,8 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       source: 'substack',
       attribution: 'Stratechery / Ben Thompson',
       media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
+      priorityScore: 58,
+      decisionReasons: ['high_substance', 'strong_evidence'],
     },
     {
       title: 'Missing',
@@ -199,13 +249,29 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
   ]);
 });
 
-test('curator prompt requires materially longer investigative summaries and fixed categories', () => {
+test('curator prompt requires materially longer investigative summaries, editorial reasons, and fixed categories', () => {
   const prompt = readFileSync(new URL('../prompts/curator.md', import.meta.url), 'utf-8');
 
   assert.match(prompt, /4-9 sentences|120-320 Chinese characters/);
   assert.doesNotMatch(prompt, /2-4 sentences/);
   assert.match(prompt, /underlying dynamics|structural shift|second-order implications|what is still unclear/i);
   assert.match(prompt, /Product, Tutorial, and Opinions\/Thoughts/);
+  assert.match(prompt, /editorialReason/);
+  assert.match(prompt, /at least 40 items/i);
+  assert.doesNotMatch(prompt, /at least 30 items/i);
+  assert.match(prompt, /closer to 50|prefer returning closer to 50/i);
   assert.match(prompt, /`category`/);
   assert.doesNotMatch(prompt, /`tags`/);
+});
+
+test('warnOnUnderfilledCuratedItems only warns when curated output is below the soft floor', () => {
+  assert.equal(typeof curateModule.warnOnUnderfilledCuratedItems, 'function');
+
+  const warnings: string[] = [];
+  curateModule.warnOnUnderfilledCuratedItems(39, (message: string) => warnings.push(message));
+  curateModule.warnOnUnderfilledCuratedItems(40, (message: string) => warnings.push(message));
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /39/);
+  assert.match(warnings[0], /40/);
 });

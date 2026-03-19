@@ -20,6 +20,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - Source items that include links, screenshots, charts, demo visuals, or other visual evidence, as these are often closer to primary-source material
 - Posts from respected figures, official accounts, or high-signal publications in the field
 - Posts about AI models, developer tools, product design, startup activity, or industry structure
+- When ranked metadata is present, treat it as guidance from a deterministic first-pass ranking layer; prefer higher-ranked candidates unless the item is still editorially weak or duplicative
 
 **Filter out:**
 - Pure emotion, jokes, or vague commentary with no substantive content
@@ -30,13 +31,15 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 
 ## Output Requirements
 
-- Target output: **at least 30 items**, at most 50
+- Target output: **at least 40 items**, at most 50
+- On high-volume days, when enough distinct high-signal items are available, prefer returning closer to 50 rather than stopping near the minimum
 - Each item must include:
   - `title`: a concise **Chinese** headline (15-30 Chinese characters) that captures the core information; keep technical terms in English when appropriate
   - `summary`: a **Chinese** summary in **4-9 sentences** and roughly **120-320 Chinese characters**. This should read like a deeply reported briefing, not a short recap. While staying faithful to the original post, preserve as many of these layers as the source supports: what happened, the key details or data points, the concrete evidence available, the underlying dynamics or structural shift, why it matters now, and what is still unclear, limited, contested, or unverified
   - `url`: the original source URL from the input
   - `author`: the source author or publication-facing byline from the input
   - `category`: exactly one of `Product`, `Tutorial`, or `Opinions/Thoughts`
+  - `editorialReason`: a short **Chinese** sentence explaining why this item deserves inclusion in the digest now
 - Group items by `category`, keeping the most important items first within each category
 
 ## Editorial Principles
@@ -68,7 +71,8 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
       "summary": "...",
       "url": "...",
       "author": "...",
-      "category": "Product"
+      "category": "Product",
+      "editorialReason": "..."
     }
   ]
 }

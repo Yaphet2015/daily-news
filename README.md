@@ -9,7 +9,7 @@ npm run generate
     │
     ├─ 1. 采集  → 拉取 Twitter 列表 + 已订阅 Substack publication 新文章
     ├─ 2. 预读  → 用额外的快模型读完 Substack 全文并压缩成 briefing
-    ├─ 3. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 30+ 条结构化资讯，按 Product / Tutorial / Opinions/Thoughts 分组
+    ├─ 3. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 40-50 条结构化资讯，按 Product / Tutorial / Opinions/Thoughts 分组
     ├─ 4. 复选  → 终端交互，人工勾选 6-10 条
     ├─ 5. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
     └─ 6. 发布  → 保存到 Obsidian Vault / output/ 目录
@@ -155,10 +155,12 @@ output/YYYY-MM-DD-substack.html
 - **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
+- **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪，互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
 - **固定分组**：发布输出按 `Product`、`Tutorial`、`Opinions/Thoughts` 三组组织，不再展示条目标签
+- **决策可追踪**：每次运行会额外写出 `output/<date>-selection-report.json`，记录分数、候选池、AI 入选和人工入选状态
 
 ---
 
@@ -169,6 +171,7 @@ daily-news/
 ├── src/
 │   ├── generate.ts    # 主入口，串联五步 pipeline
 │   ├── collect.ts     # Twitter / Substack 采集、归一化与来源级增量状态
+│   ├── rank.ts        # 显式优先级打分、重复惩罚、候选池筛选
 │   ├── curate.ts      # Substack 全文预读 + 主整理模型（OpenAI / ai-sdk）
 │   ├── select.ts      # 交互式人工复选
 │   ├── format.ts      # Obsidian + Substack 格式化
@@ -179,7 +182,7 @@ daily-news/
 │   └── curator.md     # AI curation prompt 模板（固定三分类）
 ├── data/
 │   └── state.json     # 运行状态（自动生成）
-├── output/            # 生成的 Substack HTML
+├── output/            # 生成的 Substack HTML + selection report
 ├── .env.example       # 环境变量模板
 └── README.md
 ```

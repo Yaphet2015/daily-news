@@ -28,6 +28,10 @@ interface TwitterCliTweet {
     width?: number;
     height?: number;
   }>;
+  likeCount?: number;
+  replyCount?: number;
+  repostCount?: number;
+  quoteCount?: number;
 }
 
 interface TwitterCliOutput {
@@ -48,6 +52,10 @@ interface TwitterApiTweet {
   extendedEntities?: {
     media?: unknown[];
   };
+  favorite_count?: number;
+  reply_count?: number;
+  retweet_count?: number;
+  quote_count?: number;
 }
 
 interface TwitterApiResponse {
@@ -585,6 +593,10 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
           return normalized ? [normalized] : [];
         })
       : [],
+    likeCount: toOptionalNumber(tweet.likeCount),
+    replyCount: toOptionalNumber(tweet.replyCount),
+    repostCount: toOptionalNumber(tweet.repostCount),
+    quoteCount: toOptionalNumber(tweet.quoteCount),
   };
 }
 
@@ -597,6 +609,10 @@ export function mapTwitterApiTweet(tweet: TwitterApiTweet): CollectedItem {
     publishedAt: tweet.createdAt,
     url: tweet.url ?? buildTweetUrl(tweet.author.userName, tweet.id),
     media: normalizeTwitterApiMedia(tweet.media, tweet.extendedEntities?.media),
+    likeCount: toOptionalNumber(tweet.favorite_count),
+    replyCount: toOptionalNumber(tweet.reply_count),
+    repostCount: toOptionalNumber(tweet.retweet_count),
+    quoteCount: toOptionalNumber(tweet.quote_count),
   };
 }
 

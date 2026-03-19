@@ -41,6 +41,32 @@ export interface CollectedItem {
   body?: string;
   media: MediaAsset[];
   readerBrief?: ReaderBrief;
+  likeCount?: number;
+  replyCount?: number;
+  repostCount?: number;
+  quoteCount?: number;
+}
+
+export interface ScoreBreakdown {
+  substance: number;
+  evidence: number;
+  sourceSignal: number;
+  freshness: number;
+  novelty: number;
+  actionability: number;
+  penalties: number;
+}
+
+export interface RankedItem extends CollectedItem {
+  editorialScore: number;
+  engagementScore: number;
+  priorityScore: number;
+  scoreBreakdown: ScoreBreakdown;
+  duplicateOf?: string;
+  decisionReasons: string[];
+  enteredCandidatePool?: boolean;
+  selectedByLlm?: boolean;
+  selectedByHuman?: boolean;
 }
 
 export interface CuratedItem {
@@ -52,12 +78,22 @@ export interface CuratedItem {
   source: SourceName;
   category: NewsCategory;
   media: MediaAsset[];
+  priorityScore?: number;
+  decisionReasons?: string[];
+  editorialReason?: string;
 }
 
 export interface FormatResult {
   obsidian: string;
   substack: string;
   date: string;
+}
+
+export interface SelectionReport {
+  date: string;
+  rankedItems: RankedItem[];
+  curatedItems: CuratedItem[];
+  selectedItems: CuratedItem[];
 }
 
 export interface SourceRunState {

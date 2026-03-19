@@ -1,7 +1,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FormatResult } from './types.js';
+import type { FormatResult, SelectionReport } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, '..', 'output');
@@ -41,6 +41,16 @@ ${content}
   return filepath;
 }
 
+export async function writeSelectionReport(
+  report: SelectionReport,
+  outputDir = OUTPUT_DIR,
+): Promise<string> {
+  await mkdir(outputDir, { recursive: true });
+  const filepath = join(outputDir, `${report.date}-selection-report.json`);
+  await writeFile(filepath, JSON.stringify(report, null, 2), 'utf-8');
+  return filepath;
+}
+
 function printSubstackInstructions(filepath: string): void {
   const separator = '─'.repeat(60);
   console.log(`\n${separator}`);
@@ -59,12 +69,17 @@ function printSubstackInstructions(filepath: string): void {
   console.log(separator);
 }
 
-export async function publish(result: FormatResult): Promise<void> {
+export async function publish(result: FormatResult, report?: SelectionReport): Promise<void> {
   const { obsidian, substack, date } = result;
 
   await saveObsidian(obsidian, date);
   const substackFile = await saveSubstackFile(substack, date);
   console.log(`[publish] Substack 草稿已保存: ${substackFile}`);
+
+  if (report) {
+    const reportFile = await writeSelectionReport(report);
+    console.log(`[publish] 选择报告已保存: ${reportFile}`);
+  }
 
   printSubstackInstructions(substackFile);
 }
