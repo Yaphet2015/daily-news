@@ -35,7 +35,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - On high-volume days, when enough distinct high-signal items are available, prefer returning closer to 50 rather than stopping near the minimum
 - Each item must include:
   - `title`: a concise **Chinese** headline (15-30 Chinese characters) that captures the core information; keep technical terms in English when appropriate
-  - `summary`: a **Chinese** summary in **4-9 sentences** and roughly **120-320 Chinese characters**. This should read like a deeply reported briefing, not a short recap. While staying faithful to the original post, preserve as many of these layers as the source supports: what happened, the key details or data points, the concrete evidence available, the underlying dynamics or structural shift, why it matters now, and what is still unclear, limited, contested, or unverified
+  - `summary`: a **Chinese** summary in **4-9 sentences** and roughly **120-320 Chinese characters**. This should read like a deeply reported briefing, not a short recap. As a seasoned news editor, dedicated to uncovering details and the insights behind them, ensuring no nuance is lost while preserving the essence of the original text. While staying faithful to the original post, preserve as many of these layers as the source supports: what happened, the key details or data points, the concrete evidence available, the underlying dynamics or structural shift, why it matters now, and what is still unclear, limited, contested, or unverified
   - `url`: the original source URL from the input
   - `author`: the source author or publication-facing byline from the input
   - `category`: exactly one of `Product`, `Tutorial`, or `Opinions/Thoughts`
