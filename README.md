@@ -156,6 +156,7 @@ output/YYYY-MM-DD-substack.html
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪，互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
+- **编辑偏好配置**：ranking 支持仓库内维护的作者级降权规则；当前默认对 `@tom_doerr` 做强降权，用于压低高频 GitHub 项目转发账号的排序位置，同时保留极少数高价值内容的入选可能
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
@@ -172,6 +173,7 @@ daily-news/
 │   ├── generate.ts    # 主入口，串联五步 pipeline
 │   ├── collect.ts     # Twitter / Substack 采集、归一化与来源级增量状态
 │   ├── rank.ts        # 显式优先级打分、重复惩罚、候选池筛选
+│   ├── ranking-preferences.ts # 仓库内维护的编辑偏好规则（如作者降权）
 │   ├── curate.ts      # Substack 全文预读 + 主整理模型（OpenAI / ai-sdk）
 │   ├── select.ts      # 交互式人工复选
 │   ├── format.ts      # Obsidian + Substack 格式化

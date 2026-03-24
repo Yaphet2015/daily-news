@@ -1,4 +1,5 @@
 import type { CollectedItem, RankedItem, ScoreBreakdown } from './types.js';
+import { AUTHOR_PENALTY_RULES } from './ranking-preferences.js';
 
 const SUBSTANCE_KEYWORDS = [
   'release',
@@ -45,6 +46,21 @@ function hasExternalLink(text: string): boolean {
   return /https?:\/\/\S+/i.test(text);
 }
 
+function normalizeAuthorKey(username?: string): string | undefined {
+  if (!username) return undefined;
+  return username.trim().replace(/^@+/, '').toLowerCase();
+}
+
+function getAuthorPenalty(item: CollectedItem): { penalty: number; reason?: string } {
+  const authorKey = normalizeAuthorKey(item.author.username);
+  if (!authorKey) return { penalty: 0 };
+
+  const rule = AUTHOR_PENALTY_RULES[authorKey];
+  if (!rule) return { penalty: 0 };
+
+  return { penalty: rule.penalty, reason: rule.reason };
+}
+
 function computeFreshnessScore(item: CollectedItem, newestTimestamp: number): number {
   const published = Date.parse(item.publishedAt);
   if (!Number.isFinite(published) || !Number.isFinite(newestTimestamp)) return 0;
@@ -60,6 +76,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
   const promoHits = countKeywordHits(text, PROMOTIONAL_KEYWORDS);
   const hasMedia = item.media.length > 0;
   const hasBrief = Boolean(item.readerBrief);
+  const { penalty: authorPenalty } = getAuthorPenalty(item);
 
   const substance = clamp(
     (text.length >= 80 ? 10 : 4) +
@@ -73,7 +90,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
   const freshness = computeFreshnessScore(item, newestTimestamp);
   const novelty = 15;
   const actionability = clamp(actionabilityHits * 5, 0, 10);
-  const penalties = clamp(-(promoHits * 8) - (text.length < 40 ? 8 : 0), -30, 0);
+  const penalties = clamp(-(promoHits * 8) - (text.length < 40 ? 8 : 0) - authorPenalty, -30, 0);
 
   return {
     substance,
@@ -127,7 +144,9 @@ function computeEngagementScore(item: CollectedItem, breakdown: ScoreBreakdown):
 function buildDecisionReasons(
   breakdown: ScoreBreakdown,
   engagementReason: string | undefined,
+  authorReason: string | undefined,
   duplicateOf?: string,
+  isPromotional = false,
 ): string[] {
   const reasons: string[] = [];
 
@@ -138,8 +157,9 @@ function buildDecisionReasons(
   if (breakdown.sourceSignal >= 6) reasons.push('official_source');
   if (breakdown.substance < 12) reasons.push('low_substance');
   if (breakdown.evidence < 6) reasons.push('weak_evidence');
-  if (breakdown.penalties <= -8) reasons.push('promotional');
+  if (isPromotional) reasons.push('promotional');
   if (engagementReason) reasons.push(engagementReason);
+  if (authorReason) reasons.push(authorReason);
   if (duplicateOf) reasons.push(`duplicate_of:${duplicateOf}`);
 
   return Array.from(new Set(reasons));
@@ -160,11 +180,20 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
 
     const [primary, ...duplicates] = [...group].sort((a, b) => b.priorityScore - a.priorityScore);
     for (const item of duplicates) {
+      const authorReason = item.decisionReasons.find((reason) => reason.startsWith('deprioritized_author:'));
+      const engagementReason = item.decisionReasons.find((reason) => reason === 'engagement_supporting_only');
+      const isPromotional = item.decisionReasons.includes('promotional');
       item.duplicateOf = primary.id;
       item.scoreBreakdown.novelty = 0;
       item.editorialScore = toEditorialScore(item.scoreBreakdown);
       item.priorityScore = clamp(Math.round(item.editorialScore * 0.75 + item.engagementScore * 0.25), 0, 100);
-      item.decisionReasons = buildDecisionReasons(item.scoreBreakdown, undefined, primary.id);
+      item.decisionReasons = buildDecisionReasons(
+        item.scoreBreakdown,
+        engagementReason,
+        authorReason,
+        primary.id,
+        isPromotional,
+      );
     }
   }
 
@@ -180,9 +209,12 @@ export function rankItems(items: CollectedItem[]): RankedItem[] {
   }, 0);
 
   const ranked = items.map((item) => {
+    const normalizedText = normalizeText(item.text);
+    const isPromotional = countKeywordHits(normalizedText, PROMOTIONAL_KEYWORDS) > 0;
     const scoreBreakdown = computeEditorialBreakdown(item, newestTimestamp);
     const editorialScore = toEditorialScore(scoreBreakdown);
     const { score: engagementScore, reason: engagementReason } = computeEngagementScore(item, scoreBreakdown);
+    const { reason: authorReason } = getAuthorPenalty(item);
     const priorityScore = clamp(Math.round(editorialScore * 0.75 + engagementScore * 0.25), 0, 100);
 
     return {
@@ -191,7 +223,7 @@ export function rankItems(items: CollectedItem[]): RankedItem[] {
       editorialScore,
       engagementScore,
       priorityScore,
-      decisionReasons: buildDecisionReasons(scoreBreakdown, engagementReason),
+      decisionReasons: buildDecisionReasons(scoreBreakdown, engagementReason, authorReason, undefined, isPromotional),
     };
   });
 
