@@ -34,9 +34,10 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - Target output: **at least 40 items**, at most 50
 - On high-volume days, when enough distinct high-signal items are available, prefer returning closer to 50 rather than stopping near the minimum
 - Each item must include:
+  - `id`: the exact item ID from the input
   - `title`: a concise **Chinese** headline (15-30 Chinese characters) that captures the core information; keep technical terms in English when appropriate
   - `summary`: a **Chinese** summary in **4-9 sentences** and roughly **120-320 Chinese characters**. This should read like a deeply reported briefing, not a short recap. As a seasoned news editor, dedicated to uncovering details and the insights behind them, ensuring no nuance is lost while preserving the essence of the original text. While staying faithful to the original post, preserve as many of these layers as the source supports: what happened, the key details or data points, the concrete evidence available, the underlying dynamics or structural shift, why it matters now, and what is still unclear, limited, contested, or unverified
-  - `url`: the original source URL from the input
+  - `url`: the `Primary Source URL` from the input
   - `author`: the source author or publication-facing byline from the input
   - `category`: exactly one of `Product`, `Tutorial`, or `Opinions/Thoughts`
   - `editorialReason`: a short **Chinese** sentence explaining why this item deserves inclusion in the digest now
@@ -50,6 +51,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - If a source item includes links, screenshots, charts, product UI, or demo clues, extract the concrete information those clues imply; do not just say "the author shared a link/image"
 - For Substack articles, treat the reader brief as a faithful compression of the full article body; use it aggressively, but do not invent details beyond it
 - If media is represented only as metadata in the input, use it as a clue that supporting visuals exist, but do not invent details about what the image literally shows
+- For Twitter items that include both `Primary Source URL` and `Original Post URL`, treat the primary source as the canonical article/page to cite, and the original post as distribution context only
 - If a post contains both upside and limitation, include both; avoid one-sided hype or reflexive dismissal
 - Do not invent facts that are not in the source. Careful inference is allowed, but it must stay anchored to the original post and context
 - Avoid formulaic phrasing. The summary should read like an editor who has done extra reporting on top of the source material, not a mechanical recap
@@ -67,6 +69,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 {
   "items": [
     {
+      "id": "...",
       "title": "...",
       "summary": "...",
       "url": "...",

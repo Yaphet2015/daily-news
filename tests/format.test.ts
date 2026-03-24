@@ -5,11 +5,13 @@ import { format } from '../src/format.js';
 test('format renders photo media and uses source-aware attribution', () => {
   const result = format([
     {
+      id: 'tw-1',
       title: 'Launch',
       summary: 'Summary',
-      url: 'https://x.com/alice/status/1',
+      url: 'https://docs.example.com/launch',
+      originUrl: 'https://x.com/alice/status/1',
       author: 'alice',
-      attribution: '@alice',
+      attribution: 'OpenAI Docs',
       source: 'twitter',
       category: 'Product',
       media: [
@@ -20,6 +22,7 @@ test('format renders photo media and uses source-aware attribution', () => {
       ],
     },
     {
+      id: 'ss-1',
       title: 'Article',
       summary: 'Article summary',
       url: 'https://example.substack.com/p/article',
@@ -37,8 +40,9 @@ test('format renders photo media and uses source-aware attribution', () => {
   assert.match(result.obsidian, /tags: \[daily-news\]/);
   assert.match(result.obsidian, /!\[Launch\]\(https:\/\/img\/1\.jpg\)/);
   assert.match(result.obsidian, /!\[Launch\]\(https:\/\/img\/3\.jpg\)/);
-  assert.match(result.obsidian, /来源：\[@alice\]\(https:\/\/x\.com\/alice\/status\/1\)/);
+  assert.match(result.obsidian, /来源：\[OpenAI Docs\]\(https:\/\/docs\.example\.com\/launch\)/);
   assert.match(result.obsidian, /来源：\[Stratechery \/ Ben Thompson\]\(https:\/\/example\.substack\.com\/p\/article\)/);
+  assert.doesNotMatch(result.obsidian, /x\.com\/alice\/status\/1/);
   assert.doesNotMatch(result.obsidian, /video\/1\.mp4/);
   assert.doesNotMatch(result.obsidian, /img\/2\.gif/);
 
@@ -47,7 +51,9 @@ test('format renders photo media and uses source-aware attribution', () => {
   assert.doesNotMatch(result.substack, /<code>AI<\/code>/);
   assert.match(result.substack, /<img src="https:\/\/img\/1\.jpg" alt="Launch" \/>/);
   assert.match(result.substack, /<img src="https:\/\/img\/3\.jpg" alt="Launch" \/>/);
+  assert.match(result.substack, /<p>来源：<a href="https:\/\/docs\.example\.com\/launch" target="_blank">OpenAI Docs<\/a><\/p>/);
   assert.match(result.substack, /<p>来源：<a href="https:\/\/example\.substack\.com\/p\/article" target="_blank">Stratechery \/ Ben Thompson<\/a><\/p>/);
+  assert.doesNotMatch(result.substack, /x\.com\/alice\/status\/1/);
   assert.doesNotMatch(result.substack, /video\/1\.mp4/);
   assert.doesNotMatch(result.substack, /img\/2\.gif/);
 });

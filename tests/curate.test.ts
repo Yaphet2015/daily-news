@@ -171,18 +171,28 @@ test('buildCollectedItemsPayload uses reader brief for Substack items instead of
   assert.doesNotMatch(payload, /THIS SHOULD NOT APPEAR/);
 });
 
-test('enrichCuratedItems restores source metadata, attribution, and media by matching url', () => {
+test('enrichCuratedItems restores source metadata, attribution, and media by matching id when urls collide', () => {
   assert.equal(typeof curateModule.enrichCuratedItems, 'function');
 
   const items = [
     {
+      id: 'tw-1',
       title: 'Title',
       summary: 'Summary',
-      url: 'https://example.substack.com/p/article',
+      url: 'https://docs.example.com/launch',
       author: 'ignored',
       category: 'Product',
     },
     {
+      id: 'tw-2',
+      title: 'Competing wrapper',
+      summary: 'Wrapper summary',
+      url: 'https://docs.example.com/launch',
+      author: 'ignored-2',
+      category: 'Product',
+    },
+    {
+      id: 'missing',
       title: 'Missing',
       summary: 'Missing summary',
       url: 'https://x.com/missing/status/9',
@@ -192,6 +202,50 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
   ];
 
   const collectedItems = [
+    {
+      id: 'tw-1',
+      source: 'twitter',
+      text: 'launch',
+      originUrl: 'https://x.com/openai/status/1',
+      sourceLabel: 'OpenAI Docs',
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+      linkedSource: {
+        url: 'https://docs.example.com/launch',
+        title: 'OpenAI Docs',
+        description: 'Launch docs',
+        excerpt: 'Product docs',
+        domain: 'docs.example.com',
+        via: 'tweet',
+      },
+      author: { name: 'OpenAI', username: 'openai' },
+      editorialScore: 77,
+      engagementScore: 0,
+      priorityScore: 58,
+      decisionReasons: ['high_substance', 'strong_evidence'],
+      scoreBreakdown: {
+        substance: 24,
+        evidence: 14,
+        sourceSignal: 8,
+        freshness: 9,
+        novelty: 15,
+        actionability: 7,
+        penalties: 0,
+      },
+      publishedAt: '2026-03-15T08:00:00Z',
+      url: 'https://docs.example.com/launch',
+      media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
+    },
+    {
+      id: 'tw-2',
+      source: 'twitter',
+      text: 'another wrapper',
+      originUrl: 'https://x.com/other/status/2',
+      sourceLabel: 'OpenAI Docs',
+      author: { name: 'Other', username: 'other' },
+      publishedAt: '2026-03-15T08:01:00Z',
+      url: 'https://docs.example.com/launch',
+      media: [],
+    },
     {
       id: 'ss-1',
       source: 'substack',
@@ -225,18 +279,33 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
 
   assert.deepEqual(curateModule.enrichCuratedItems(items as never[], collectedItems as never[]), [
     {
+      id: 'tw-1',
       title: 'Title',
       summary: 'Summary',
-      url: 'https://example.substack.com/p/article',
-      author: 'Ben Thompson',
+      url: 'https://docs.example.com/launch',
+      originUrl: 'https://x.com/openai/status/1',
+      author: 'openai',
       category: 'Product',
-      source: 'substack',
-      attribution: 'Stratechery / Ben Thompson',
+      source: 'twitter',
+      attribution: 'OpenAI Docs',
       media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
       priorityScore: 58,
       decisionReasons: ['high_substance', 'strong_evidence'],
     },
     {
+      id: 'tw-2',
+      title: 'Competing wrapper',
+      summary: 'Wrapper summary',
+      url: 'https://docs.example.com/launch',
+      originUrl: 'https://x.com/other/status/2',
+      author: 'other',
+      category: 'Product',
+      source: 'twitter',
+      attribution: 'OpenAI Docs',
+      media: [],
+    },
+    {
+      id: 'missing',
       title: 'Missing',
       summary: 'Missing summary',
       url: 'https://x.com/missing/status/9',
@@ -252,6 +321,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
 test('curator prompt requires materially longer investigative summaries, editorial reasons, and fixed categories', () => {
   const prompt = readFileSync(new URL('../prompts/curator.md', import.meta.url), 'utf-8');
 
+  assert.match(prompt, /`id`/);
   assert.match(prompt, /4-9 sentences|120-320 Chinese characters/);
   assert.doesNotMatch(prompt, /2-4 sentences/);
   assert.match(prompt, /underlying dynamics|structural shift|second-order implications|what is still unclear/i);

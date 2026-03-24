@@ -2,14 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatSelectionLabel } from '../src/select.js';
 
-test('formatSelectionLabel shows ranking metadata before the summary preview when available', () => {
+test('formatSelectionLabel shows ranking metadata before a multi-line summary preview when available', () => {
   const label = formatSelectionLabel(
     {
+      id: 'tw-1',
       title: 'Launch',
-      summary: 'A'.repeat(90),
-      url: 'https://x.com/alice/status/1',
+      summary: 'A'.repeat(180),
+      url: 'https://docs.example.com/launch',
+      originUrl: 'https://x.com/alice/status/1',
       author: 'Alice',
-      attribution: '@alice',
+      attribution: 'OpenAI Docs',
       source: 'twitter',
       category: 'Product',
       media: [],
@@ -20,7 +22,7 @@ test('formatSelectionLabel shows ranking metadata before the summary preview whe
   );
 
   assert.match(label, /^ 1\. Launch\n/);
-  assert.match(label, /twitter · @alice · Alice/);
+  assert.match(label, /twitter · OpenAI Docs · Alice/);
   assert.match(label, /score 72 · high_substance, strong_evidence/);
-  assert.match(label, /A{70}…/);
+  assert.match(label, /      A{70}\n      A{70}\n      A{40}/);
 });

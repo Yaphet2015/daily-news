@@ -17,6 +17,26 @@ test('mapTwitterCliTweet preserves empty media arrays', () => {
 
   assert.deepEqual(tweet.media, []);
   assert.equal(tweet.url, 'https://x.com/alice/status/1');
+  assert.equal(tweet.originUrl, 'https://x.com/alice/status/1');
+  assert.deepEqual(tweet.outboundLinks, []);
+});
+
+test('mapTwitterCliTweet preserves structured outbound links for later source resolution', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: '1b',
+    text: 'docs https://t.co/short',
+    author: {
+      id: 'u1b',
+      name: 'Alice',
+      screenName: 'alice',
+    },
+    createdAt: '2026-03-15T00:00:00Z',
+    media: [],
+    urls: ['https://docs.example.com/launch?utm_source=x', 'https://x.com/ignored/status/1'],
+  } as never);
+
+  assert.equal(tweet.originUrl, 'https://x.com/alice/status/1b');
+  assert.deepEqual(tweet.outboundLinks, ['https://docs.example.com/launch']);
 });
 
 test('mapTwitterCliTweet preserves mixed media from twitter-cli', () => {

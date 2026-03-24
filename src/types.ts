@@ -28,18 +28,47 @@ export interface PublicationRef {
   url?: string;
 }
 
+export interface ReplyContext {
+  id: string;
+  text: string;
+  author: CollectedAuthor;
+  publishedAt?: string;
+  url?: string;
+  outboundLinks: string[];
+}
+
+export interface LinkedSource {
+  url: string;
+  title?: string;
+  description?: string;
+  excerpt?: string;
+  domain: string;
+  via: 'tweet' | 'reply';
+}
+
+export interface SourceResolution {
+  decision: 'keep_origin' | 'use_linked_source';
+  reason: string;
+}
+
 export interface CollectedItem {
   id: string;
   source: SourceName;
   url: string;
+  originUrl?: string;
   publishedAt: string;
   author: CollectedAuthor;
   publication?: PublicationRef;
   title?: string;
   subtitle?: string | null;
+  sourceLabel?: string;
   text: string;
   body?: string;
   media: MediaAsset[];
+  outboundLinks?: string[];
+  replyContext?: ReplyContext[];
+  linkedSource?: LinkedSource;
+  sourceResolution?: SourceResolution;
   readerBrief?: ReaderBrief;
   likeCount?: number;
   replyCount?: number;
@@ -70,9 +99,11 @@ export interface RankedItem extends CollectedItem {
 }
 
 export interface CuratedItem {
+  id: string;
   title: string;
   summary: string;
   url: string;
+  originUrl?: string;
   author: string;
   attribution: string;
   source: SourceName;

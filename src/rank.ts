@@ -71,22 +71,43 @@ function computeFreshnessScore(item: CollectedItem, newestTimestamp: number): nu
 
 function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number): ScoreBreakdown {
   const text = normalizeText(item.text);
+  const linkedText = normalizeText(
+    [item.linkedSource?.title, item.linkedSource?.description, item.linkedSource?.excerpt]
+      .filter(Boolean)
+      .join(' '),
+  );
   const substanceHits = countKeywordHits(text, SUBSTANCE_KEYWORDS);
+  const linkedSubstanceHits = countKeywordHits(linkedText, SUBSTANCE_KEYWORDS);
   const actionabilityHits = countKeywordHits(text, ACTIONABILITY_KEYWORDS);
   const promoHits = countKeywordHits(text, PROMOTIONAL_KEYWORDS);
   const hasMedia = item.media.length > 0;
   const hasBrief = Boolean(item.readerBrief);
+  const hasLinkedSource = Boolean(item.linkedSource);
   const { penalty: authorPenalty } = getAuthorPenalty(item);
 
   const substance = clamp(
     (text.length >= 80 ? 10 : 4) +
       substanceHits * 4 +
+      linkedSubstanceHits * 3 +
       (hasBrief ? 8 : 0),
     0,
     30,
   );
-  const evidence = clamp((hasExternalLink(text) ? 10 : 0) + (hasMedia ? 8 : 0) + (hasBrief ? 6 : 0), 0, 20);
-  const sourceSignal = clamp((item.source === 'substack' ? 8 : 4) + (item.author.username ? 2 : 0), 0, 15);
+  const evidence = clamp(
+    (hasExternalLink(text) ? 10 : 0) +
+      (hasLinkedSource ? 8 : 0) +
+      (hasMedia ? 8 : 0) +
+      (hasBrief ? 6 : 0),
+    0,
+    20,
+  );
+  const sourceSignal = clamp(
+    (item.source === 'substack' ? 8 : 4) +
+      (item.author.username ? 2 : 0) +
+      (item.sourceResolution?.decision === 'use_linked_source' ? 3 : 0),
+    0,
+    15,
+  );
   const freshness = computeFreshnessScore(item, newestTimestamp);
   const novelty = 15;
   const actionability = clamp(actionabilityHits * 5, 0, 10);
@@ -166,6 +187,33 @@ function buildDecisionReasons(
 }
 
 function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
+  const byCanonicalUrl = new Map<string, RankedItem[]>();
+  for (const item of items) {
+    const group = byCanonicalUrl.get(item.url) ?? [];
+    group.push(item);
+    byCanonicalUrl.set(item.url, group);
+  }
+
+  for (const group of byCanonicalUrl.values()) {
+    if (group.length < 2) continue;
+
+    const [primary, ...duplicates] = [...group].sort((a, b) => b.priorityScore - a.priorityScore);
+    for (const item of duplicates) {
+      const authorReason = item.decisionReasons.find((reason) => reason.startsWith('deprioritized_author:'));
+      const engagementReason = item.decisionReasons.find((reason) => reason === 'engagement_supporting_only');
+      item.duplicateOf = primary.id;
+      item.scoreBreakdown.novelty = 0;
+      item.editorialScore = toEditorialScore(item.scoreBreakdown);
+      item.priorityScore = clamp(Math.round(item.editorialScore * 0.75 + item.engagementScore * 0.25), 0, 100);
+      item.decisionReasons = buildDecisionReasons(
+        item.scoreBreakdown,
+        engagementReason,
+        authorReason,
+        primary.id,
+      );
+    }
+  }
+
   const byFingerprint = new Map<string, RankedItem[]>();
 
   for (const item of items) {

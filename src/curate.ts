@@ -11,6 +11,7 @@ const PROMPT_PATH = join(__dirname, '..', 'prompts', 'curator.md');
 const DEFAULT_READER_MODEL = 'gpt-4o-mini';
 
 interface LlmCuratedItem {
+  id: string;
   title: string;
   summary: string;
   url: string;
@@ -76,6 +77,7 @@ function formatMediaForPrompt(media: MediaAsset[]): string {
 }
 
 function getAttribution(item: CollectedItem): string {
+  if (item.sourceLabel) return item.sourceLabel;
   if (item.source === 'substack') {
     const publicationName = item.publication?.name;
     if (!publicationName) return item.author.name;
@@ -167,6 +169,9 @@ function parseCurateResponse(raw: string): LlmCuratedItem[] {
   if (!Array.isArray(parsed.items)) throw new Error('AI 响应缺少 items 字段');
 
   return parsed.items.map((item) => {
+    if (typeof item.id !== 'string' || item.id.length === 0) {
+      throw new Error('AI 响应包含无效 id');
+    }
     if (!VALID_CATEGORIES.includes(item.category)) {
       throw new Error(`AI 响应包含无效分类: ${item.category}`);
     }
@@ -255,6 +260,7 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
       if (item.source === 'substack') {
         return [
           `[${index + 1}] Source: substack`,
+          `Item ID: ${item.id}`,
           `Publication: ${item.publication?.name ?? 'Unknown publication'}`,
           `Author: ${item.author.name}`,
           `Time: ${item.publishedAt}`,
@@ -269,22 +275,35 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
 
       return [
         `[${index + 1}] Source: twitter`,
+        `Item ID: ${item.id}`,
         `Author: @${item.author.username ?? item.author.name} (${item.author.name})`,
         `Time: ${item.publishedAt}`,
         `Content: ${item.text}`,
-        `URL: ${item.url}`,
+        `Primary Source URL: ${item.url}`,
+        `Original Post URL: ${item.originUrl ?? item.url}`,
+        item.sourceLabel ? `Primary Source: ${item.sourceLabel}` : null,
+        item.linkedSource?.title ? `Linked Title: ${item.linkedSource.title}` : null,
+        item.linkedSource?.description ? `Linked Description: ${item.linkedSource.description}` : null,
+        item.linkedSource?.excerpt ? `Linked Excerpt: ${item.linkedSource.excerpt}` : null,
+        item.replyContext && item.replyContext.length > 0
+          ? `Reply Context:\n${item.replyContext
+              .map((reply) => `- @${reply.author.username ?? reply.author.name}: ${reply.text}`)
+              .join('\n')}`
+          : null,
         ...rankingLines,
         formatMediaForPrompt(item.media),
-      ].join('\n');
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join('\n');
     })
     .join('\n\n---\n\n');
 }
 
 export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: CollectedItem[]): CuratedItem[] {
-  const itemByUrl = new Map(collectedItems.map((item) => [item.url, item]));
+  const itemById = new Map(collectedItems.map((item) => [item.id, item]));
 
   return items.map((item) => {
-    const sourceItem = itemByUrl.get(item.url);
+    const sourceItem = itemById.get(item.id);
     const author =
       sourceItem?.author.username ??
       sourceItem?.author.name ??
@@ -297,6 +316,10 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
       attribution: sourceItem ? getAttribution(sourceItem) : `@${item.author}`,
       media: sourceItem?.media ?? [],
     };
+
+    if (sourceItem?.originUrl) {
+      curatedItem.originUrl = sourceItem.originUrl;
+    }
 
     if (sourceItem && isRankedItem(sourceItem)) {
       curatedItem.priorityScore = sourceItem.priorityScore;

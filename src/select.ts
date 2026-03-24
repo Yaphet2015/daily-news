@@ -1,10 +1,25 @@
 import { checkbox } from '@inquirer/prompts';
 import type { CuratedItem } from './types.js';
 
+const PREVIEW_LINE_LENGTH = 70;
+const PREVIEW_MAX_LINES = 3;
+
+function formatPreview(summary: string): string[] {
+  const lines: string[] = [];
+
+  for (let offset = 0; offset < summary.length && lines.length < PREVIEW_MAX_LINES; offset += PREVIEW_LINE_LENGTH) {
+    lines.push(summary.slice(offset, offset + PREVIEW_LINE_LENGTH));
+  }
+
+  if (summary.length > PREVIEW_LINE_LENGTH * PREVIEW_MAX_LINES && lines.length > 0) {
+    const lastLine = lines[lines.length - 1] ?? '';
+    lines[lines.length - 1] = lastLine.slice(0, Math.max(0, PREVIEW_LINE_LENGTH - 1)) + '…';
+  }
+
+  return lines;
+}
+
 export function formatSelectionLabel(item: CuratedItem, index: number): string {
-  const preview = item.summary.length > 70
-    ? item.summary.slice(0, 70) + '…'
-    : item.summary;
   const metadata = `${item.source} · ${item.attribution} · ${item.author}`;
   const rankingHint =
     typeof item.priorityScore === 'number'
@@ -16,7 +31,7 @@ export function formatSelectionLabel(item: CuratedItem, index: number): string {
     `${String(index + 1).padStart(2, ' ')}. ${item.title}`,
     `      ${metadata}`,
     rankingHint ? `      ${rankingHint}` : null,
-    `      ${preview}`,
+    ...formatPreview(item.summary).map((line) => `      ${line}`),
   ]
     .filter(Boolean)
     .join('\n');

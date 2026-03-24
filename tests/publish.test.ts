@@ -39,6 +39,7 @@ test('writeSelectionReport persists ranking, curation, and human selection metad
     ],
     curatedItems: [
       {
+        id: '1',
         title: 'OpenAI 发布新文档',
         summary: 'Summary',
         url: 'https://x.com/alice/status/1',
@@ -54,6 +55,7 @@ test('writeSelectionReport persists ranking, curation, and human selection metad
     ],
     selectedItems: [
       {
+        id: '1',
         title: 'OpenAI 发布新文档',
         summary: 'Summary',
         url: 'https://x.com/alice/status/1',

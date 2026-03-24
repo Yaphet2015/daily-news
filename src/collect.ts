@@ -1,7 +1,15 @@
 import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readState, writeState } from './state.js';
-import type { CollectedItem, MediaAsset, RunState, SourceName } from './types.js';
+import type {
+  CollectedItem,
+  LinkedSource,
+  MediaAsset,
+  ReplyContext,
+  RunState,
+  SourceName,
+  SourceResolution,
+} from './types.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -28,6 +36,7 @@ interface TwitterCliTweet {
     width?: number;
     height?: number;
   }>;
+  urls?: string[];
   likeCount?: number;
   replyCount?: number;
   repostCount?: number;
@@ -49,6 +58,12 @@ interface TwitterApiTweet {
   createdAt: string;
   url?: string;
   media?: unknown;
+  entities?: {
+    urls?: Array<{
+      expanded_url?: string;
+      url?: string;
+    }>;
+  };
   extendedEntities?: {
     media?: unknown[];
   };
@@ -64,6 +79,31 @@ interface TwitterApiResponse {
   next_cursor: string;
   status: string;
   message?: string;
+}
+
+interface TwitterApiReplyResponse {
+  replies?: TwitterApiReply[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  status?: string;
+  message?: string;
+}
+
+interface TwitterApiReply {
+  id: string;
+  text: string;
+  url?: string;
+  createdAt?: string;
+  author?: {
+    name?: string;
+    userName?: string;
+  };
+  entities?: {
+    urls?: Array<{
+      expanded_url?: string;
+      url?: string;
+    }>;
+  };
 }
 
 interface SubstackPublicationLike {
@@ -124,6 +164,67 @@ function buildTweetUrl(username: string, id: string): string {
   return `https://x.com/${username}/status/${id}`;
 }
 
+function normalizeDomain(hostname: string): string {
+  return hostname.trim().replace(/^www\./i, '').toLowerCase();
+}
+
+function isTwitterDomain(hostname: string): boolean {
+  const normalized = normalizeDomain(hostname);
+  return normalized === 'x.com' || normalized === 'twitter.com' || normalized === 't.co';
+}
+
+export function normalizeExternalUrl(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (isTwitterDomain(parsed.hostname)) return null;
+    parsed.hash = '';
+
+    const paramsToDrop = ['ref', 's'];
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (key.toLowerCase().startsWith('utm_') || paramsToDrop.includes(key.toLowerCase())) {
+        parsed.searchParams.delete(key);
+      }
+    }
+
+    const normalized = parsed.toString();
+    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+  } catch {
+    return null;
+  }
+}
+
+function extractUrlsFromText(text: string): string[] {
+  return Array.from(text.matchAll(/https?:\/\/\S+/gi))
+    .map((match) => match[0].replace(/[),.;!?]+$/g, ''))
+    .map((value) => normalizeExternalUrl(value))
+    .flatMap((value) => (value ? [value] : []));
+}
+
+function dedupeUrls(urls: string[]): string[] {
+  return Array.from(new Set(urls));
+}
+
+function extractStructuredUrls(urls: Array<string | undefined | null>): string[] {
+  return dedupeUrls(
+    urls
+      .map((url) => (typeof url === 'string' ? normalizeExternalUrl(url) : null))
+      .flatMap((url) => (url ? [url] : [])),
+  );
+}
+
+function extractTwitterApiUrls(tweet: Pick<TwitterApiTweet, 'entities' | 'text'>): string[] {
+  const structured = extractStructuredUrls(
+    (tweet.entities?.urls ?? []).flatMap((entry) => [entry.expanded_url, entry.url]),
+  );
+  return structured.length > 0 ? structured : extractUrlsFromText(tweet.text);
+}
+
+function extractTwitterCliUrls(tweet: Pick<TwitterCliTweet, 'urls' | 'text'>): string[] {
+  const structured = extractStructuredUrls(tweet.urls ?? []);
+  return structured.length > 0 ? structured : extractUrlsFromText(tweet.text);
+}
+
 function toOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -131,6 +232,10 @@ function toOptionalNumber(value: unknown): number | undefined {
 function toUnixSeconds(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
+}
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function sortNewestFirst(items: CollectedItem[]): CollectedItem[] {
@@ -439,6 +544,162 @@ export function buildTwitterCliCommand(listId: string, maxTweets: number, proxy:
   return `${proxyPrefix}twitter list ${listId} --max ${maxTweets} --json`;
 }
 
+function buildTwitterReplyCommand(tweetId: string, maxReplies: number, proxy: string | undefined): string {
+  const proxyPrefix = proxy ? `HTTP_PROXY=${proxy} HTTPS_PROXY=${proxy} ` : '';
+  return `${proxyPrefix}twitter tweet ${tweetId} --max ${maxReplies} --json`;
+}
+
+function buildGenericCurlArgs(url: string, proxy: string | undefined): string[] {
+  return [
+    '-fsSL',
+    '--compressed',
+    '--connect-timeout',
+    '10',
+    '--max-time',
+    '20',
+    ...(proxy ? ['--proxy', proxy] : []),
+    '-H',
+    'Accept: text/html,text/plain;q=0.9,*/*;q=0.8',
+    url,
+  ];
+}
+
+function stripTrackingTitle(value: string): string {
+  return value.replace(/\s*[|\-]\s*(twitter|x)\s*$/i, '').trim();
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function extractMetaTag(html: string, attr: string, value: string): string | undefined {
+  const match = html.match(
+    new RegExp(`<meta[^>]+${attr}=["']${value}["'][^>]+content=["']([^"']+)["']`, 'i'),
+  );
+  return match?.[1] ? decodeHtml(match[1]).trim() : undefined;
+}
+
+function extractTitle(html: string): string | undefined {
+  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return match?.[1] ? stripTrackingTitle(decodeHtml(match[1]).replace(/\s+/g, ' ').trim()) : undefined;
+}
+
+function extractMainText(html: string): string {
+  const bodyMatch =
+    html.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ??
+    html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ??
+    html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const body = bodyMatch?.[1] ?? html;
+  return stripHtml(
+    body
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' '),
+  ).slice(0, 4000);
+}
+
+function resolveSourceLabel(linkedSource: LinkedSource): string {
+  const preferred = linkedSource.title?.trim();
+  if (preferred) return preferred;
+  return linkedSource.domain;
+}
+
+function countSentences(text: string): number {
+  return text.split(/[.!?。！？\n]+/).filter((part) => part.trim().length > 0).length;
+}
+
+function hasBulletLikeStructure(text: string): boolean {
+  return /(^|\n)\s*(?:[-*•]|\d+\.)\s+/m.test(text);
+}
+
+function tokenizeForOverlap(text: string): string[] {
+  return normalizeText(text)
+    .split(/[^a-z0-9\u4e00-\u9fff]+/i)
+    .filter((token) => token.length >= 3);
+}
+
+function hasMeaningfulOverlap(left: string, right: string): boolean {
+  const leftTokens = new Set(tokenizeForOverlap(left));
+  if (leftTokens.size === 0) return false;
+  let overlap = 0;
+  for (const token of tokenizeForOverlap(right)) {
+    if (leftTokens.has(token)) overlap += 1;
+    if (overlap >= 2) return true;
+  }
+  return false;
+}
+
+function looksLikeWrapperText(text: string): boolean {
+  const normalized = normalizeText(text);
+  const promoPhrases = [
+    'details',
+    'read more',
+    'full post',
+    'blog post',
+    'docs',
+    'documentation',
+    'announcement',
+    'announcing',
+    'introducing',
+    'launch',
+    'launched',
+    'release',
+    'released',
+    'available now',
+    'more here',
+    'link below',
+    'see here',
+    '发布',
+    '详情',
+    '文档',
+    '博客',
+    '全文',
+    '链接',
+    '更多信息',
+  ];
+
+  const hasPromoPhrase = promoPhrases.some((phrase) => normalized.includes(phrase));
+  const shortEnough = normalized.length <= 280;
+  return shortEnough && (hasPromoPhrase || countSentences(text) <= 2);
+}
+
+function shouldKeepOriginTweet(item: CollectedItem, linkedSource: LinkedSource): boolean {
+  const text = item.text.trim();
+  if (text.length >= 400) return true;
+  if (hasBulletLikeStructure(text)) return true;
+  if (countSentences(text) >= 4 && !looksLikeWrapperText(text)) return true;
+
+  const pageContext = [linkedSource.title, linkedSource.description, linkedSource.excerpt]
+    .filter(Boolean)
+    .join(' ');
+  return !looksLikeWrapperText(text) && !hasMeaningfulOverlap(text, pageContext);
+}
+
+export function resolveTwitterLinkedSource(
+  item: CollectedItem,
+  linkedSources: LinkedSource[],
+): { linkedSource?: LinkedSource; sourceResolution: SourceResolution; sourceLabel?: string } {
+  if (item.source !== 'twitter' || linkedSources.length === 0) {
+    return { sourceResolution: { decision: 'keep_origin', reason: 'no_linked_source' } };
+  }
+
+  const preferred = linkedSources[0]!;
+  if (shouldKeepOriginTweet(item, preferred)) {
+    return { sourceResolution: { decision: 'keep_origin', reason: 'tweet_has_unique_context' } };
+  }
+
+  return {
+    linkedSource: preferred,
+    sourceLabel: resolveSourceLabel(preferred),
+    sourceResolution: { decision: 'use_linked_source', reason: `${preferred.via}_wrapper` },
+  };
+}
+
 async function fetchSubstackText(url: string): Promise<string> {
   const proxy = resolveHttpProxy();
   const { stdout } = await execFileAsync(
@@ -447,6 +708,98 @@ async function fetchSubstackText(url: string): Promise<string> {
     { maxBuffer: 20 * 1024 * 1024 },
   );
   return stdout;
+}
+
+async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
+  const normalizedUrl = normalizeExternalUrl(url);
+  if (!normalizedUrl) return null;
+
+  const proxy = resolveHttpProxy();
+  const { stdout } = await execFileAsync(
+    'curl',
+    buildGenericCurlArgs(normalizedUrl, proxy),
+    { maxBuffer: 2 * 1024 * 1024 },
+  );
+
+  const trimmed = stdout.trim();
+  if (!trimmed) return null;
+
+  const parsedUrl = new URL(normalizedUrl);
+  const isHtml = /<html|<body|<article|<main|<title/i.test(trimmed);
+  const title = isHtml
+    ? extractMetaTag(trimmed, 'property', 'og:site_name') ??
+      extractMetaTag(trimmed, 'property', 'og:title') ??
+      extractTitle(trimmed)
+    : undefined;
+  const description = isHtml
+    ? extractMetaTag(trimmed, 'name', 'description') ??
+      extractMetaTag(trimmed, 'property', 'og:description')
+    : undefined;
+  const excerpt = (isHtml ? extractMainText(trimmed) : trimmed.replace(/\s+/g, ' ').trim()).slice(0, 1500);
+
+  if (!title && !description && excerpt.length < 80) return null;
+
+  return {
+    url: normalizedUrl,
+    title,
+    description,
+    excerpt,
+    domain: normalizeDomain(parsedUrl.hostname),
+    via: 'tweet',
+  };
+}
+
+async function fetchTwitterRepliesViaCli(tweetId: string, maxReplies: number): Promise<ReplyContext[]> {
+  const proxy = resolveHttpProxy();
+  const { stdout } = await execAsync(buildTwitterReplyCommand(tweetId, maxReplies, proxy), {
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const payload = JSON.parse(stdout) as TwitterCliTweet[];
+  return payload.slice(1, 1 + maxReplies).map((reply) => ({
+    id: reply.id,
+    text: reply.text,
+    author: { name: reply.author.name, username: reply.author.screenName },
+    publishedAt: reply.createdAt,
+    url: buildTweetUrl(reply.author.screenName, reply.id),
+    outboundLinks: extractTwitterCliUrls(reply),
+  }));
+}
+
+async function fetchTwitterRepliesViaApi(tweetId: string, maxReplies: number): Promise<ReplyContext[]> {
+  const apiKey = process.env.TWITTERAPI_KEY;
+  if (!apiKey) return [];
+
+  const params = new URLSearchParams({
+    tweetId,
+    queryType: 'Latest',
+    cursor: '',
+  });
+  const res = await fetch(`${TWITTER_API_BASE}/twitter/tweet/replies/v2?${params}`, {
+    headers: { 'X-API-Key': apiKey },
+  });
+
+  if (!res.ok) {
+    throw new Error(`twitterapi.io replies 请求失败: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as TwitterApiReplyResponse;
+  if (data.status !== 'success') {
+    throw new Error(`twitterapi.io replies 返回错误: ${data.message ?? data.status}`);
+  }
+
+  return (data.replies ?? []).slice(0, maxReplies).map((reply) => ({
+    id: reply.id,
+    text: reply.text,
+    author: {
+      name: reply.author?.name ?? reply.author?.userName ?? 'Unknown',
+      username: reply.author?.userName,
+    },
+    publishedAt: reply.createdAt,
+    url: reply.url,
+    outboundLinks: extractStructuredUrls(
+      (reply.entities?.urls ?? []).flatMap((entry) => [entry.expanded_url, entry.url]),
+    ),
+  }));
 }
 
 async function fetchPublicSubstackPublications(): Promise<
@@ -552,6 +905,70 @@ async function collectViaApi(
   return tweets;
 }
 
+async function fetchTwitterReplies(item: CollectedItem, maxReplies = 3): Promise<ReplyContext[]> {
+  if (item.source !== 'twitter') return [];
+
+  if (process.env.TWITTERAPI_KEY) {
+    try {
+      return await fetchTwitterRepliesViaApi(item.id, maxReplies);
+    } catch (error) {
+      console.warn(`[collect] twitterapi replies 失败，回退到 twitter-cli: ${error}`);
+    }
+  }
+
+  try {
+    return await fetchTwitterRepliesViaCli(item.id, maxReplies);
+  } catch (error) {
+    console.warn(`[collect] twitter-cli replies 失败，跳过 replies: ${error}`);
+    return [];
+  }
+}
+
+async function resolveTwitterPrimarySource(item: CollectedItem): Promise<CollectedItem> {
+  if (item.source !== 'twitter') return item;
+
+  const tweetLinks = item.outboundLinks ?? [];
+  const replyContext = tweetLinks.length > 0 ? [] : await fetchTwitterReplies(item, 3);
+  const replyLinks = dedupeUrls(replyContext.flatMap((reply) => reply.outboundLinks));
+  const candidateLinks = tweetLinks.length > 0 ? tweetLinks : replyLinks;
+
+  if (candidateLinks.length === 0) {
+    return {
+      ...item,
+      replyContext,
+      sourceResolution: { decision: 'keep_origin', reason: 'no_linked_source' },
+    };
+  }
+
+  const linkedSources: LinkedSource[] = [];
+  for (const [index, link] of candidateLinks.entries()) {
+    const linkedSource = await fetchLinkedPage(link);
+    if (!linkedSource) continue;
+    linkedSources.push({
+      ...linkedSource,
+      via: tweetLinks.length > 0 && index < tweetLinks.length ? 'tweet' : 'reply',
+    });
+  }
+
+  const resolved = resolveTwitterLinkedSource(item, linkedSources);
+  if (!resolved.linkedSource) {
+    return {
+      ...item,
+      replyContext,
+      sourceResolution: resolved.sourceResolution,
+    };
+  }
+
+  return {
+    ...item,
+    url: resolved.linkedSource.url,
+    sourceLabel: resolved.sourceLabel,
+    linkedSource: resolved.linkedSource,
+    replyContext,
+    sourceResolution: resolved.sourceResolution,
+  };
+}
+
 async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> {
   const listId = process.env.TWITTER_LIST_ID ?? '1602502639287435265';
   console.log(
@@ -575,18 +992,22 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
   }
 
   const filtered = filterSinceTime(items, sinceTime);
-  console.log(`[collect] Twitter 完成，共采集 ${filtered.length} 条内容`);
-  return sortNewestFirst(filtered);
+  const resolved = await Promise.all(filtered.map((item) => resolveTwitterPrimarySource(item)));
+  console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);
+  return sortNewestFirst(resolved);
 }
 
 export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
+  const originUrl = buildTweetUrl(tweet.author.screenName, tweet.id);
   return {
     id: tweet.id,
     source: 'twitter',
     text: tweet.text,
     author: { name: tweet.author.name, username: tweet.author.screenName },
     publishedAt: tweet.createdAt,
-    url: buildTweetUrl(tweet.author.screenName, tweet.id),
+    url: originUrl,
+    originUrl,
+    outboundLinks: extractTwitterCliUrls(tweet),
     media: Array.isArray(tweet.media)
       ? tweet.media.flatMap((item) => {
           const normalized = normalizeMediaItem(item);
@@ -601,13 +1022,16 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
 }
 
 export function mapTwitterApiTweet(tweet: TwitterApiTweet): CollectedItem {
+  const originUrl = tweet.url ?? buildTweetUrl(tweet.author.userName, tweet.id);
   return {
     id: tweet.id,
     source: 'twitter',
     text: tweet.text,
     author: { name: tweet.author.name, username: tweet.author.userName },
     publishedAt: tweet.createdAt,
-    url: tweet.url ?? buildTweetUrl(tweet.author.userName, tweet.id),
+    url: originUrl,
+    originUrl,
+    outboundLinks: extractTwitterApiUrls(tweet),
     media: normalizeTwitterApiMedia(tweet.media, tweet.extendedEntities?.media),
     likeCount: toOptionalNumber(tweet.favorite_count),
     replyCount: toOptionalNumber(tweet.reply_count),

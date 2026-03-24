@@ -28,16 +28,16 @@ async function main(): Promise<void> {
   const selectedItems = await select(curatedItems);
   const formatted = format(selectedItems);
 
-  const candidateUrls = new Set(candidateItems.map((item) => item.url));
-  const curatedUrls = new Set(curatedItems.map((item) => item.url));
-  const selectedUrls = new Set(selectedItems.map((item) => item.url));
+  const candidateIds = new Set(candidateItems.map((item) => item.id));
+  const curatedIds = new Set(curatedItems.map((item) => item.id));
+  const selectedIds = new Set(selectedItems.map((item) => item.id));
   const report = {
     date: formatted.date,
     rankedItems: rankedItems.map((item) => ({
       ...item,
-      enteredCandidatePool: candidateUrls.has(item.url),
-      selectedByLlm: curatedUrls.has(item.url),
-      selectedByHuman: selectedUrls.has(item.url),
+      enteredCandidatePool: candidateIds.has(item.id),
+      selectedByLlm: curatedIds.has(item.id),
+      selectedByHuman: selectedIds.has(item.id),
     })),
     curatedItems,
     selectedItems,
