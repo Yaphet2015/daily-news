@@ -711,6 +711,12 @@ export function resolveTwitterLinkedSource(
   };
 }
 
+export function shouldFetchRepliesForPrimarySource(item: CollectedItem): boolean {
+  if (item.source !== 'twitter') return false;
+  if ((item.outboundLinks ?? []).length > 0) return false;
+  return looksLikeWrapperText(item.text);
+}
+
 async function fetchSubstackText(url: string): Promise<string> {
   const proxy = resolveHttpProxy();
   const { stdout } = await execFileAsync(
@@ -769,6 +775,7 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
 
 interface ResolveTwitterPrimarySourceOptions {
   fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
+  fetchTwitterReplies?: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>;
 }
 
 interface FetchTwitterRepliesOptions {
@@ -983,8 +990,9 @@ export async function resolveTwitterPrimarySource(
   if (item.source !== 'twitter') return item;
 
   const fetchLinkedPageImpl = options.fetchLinkedPage ?? fetchLinkedPage;
+  const fetchTwitterRepliesImpl = options.fetchTwitterReplies ?? fetchTwitterReplies;
   const tweetLinks = item.outboundLinks ?? [];
-  const replyContext = tweetLinks.length > 0 ? [] : await fetchTwitterReplies(item, 3);
+  const replyContext = shouldFetchRepliesForPrimarySource(item) ? await fetchTwitterRepliesImpl(item, 1) : [];
   const replyLinks = dedupeUrls(replyContext.flatMap((reply) => reply.outboundLinks));
   const candidateLinks = tweetLinks.length > 0 ? tweetLinks : replyLinks;
 
@@ -1031,6 +1039,24 @@ export async function resolveTwitterPrimarySource(
   };
 }
 
+interface ResolveTwitterPrimarySourcesOptions {
+  resolveTwitterPrimarySource?: (item: CollectedItem) => Promise<CollectedItem>;
+}
+
+export async function resolveTwitterPrimarySources(
+  items: CollectedItem[],
+  options: ResolveTwitterPrimarySourcesOptions = {},
+): Promise<CollectedItem[]> {
+  const resolveTwitterPrimarySourceImpl = options.resolveTwitterPrimarySource ?? resolveTwitterPrimarySource;
+  const resolved: CollectedItem[] = [];
+
+  for (const item of items) {
+    resolved.push(await resolveTwitterPrimarySourceImpl(item));
+  }
+
+  return resolved;
+}
+
 async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> {
   const listId = process.env.TWITTER_LIST_ID ?? '1602502639287435265';
   console.log(
@@ -1054,7 +1080,7 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
   }
 
   const filtered = filterSinceTime(items, sinceTime);
-  const resolved = await Promise.all(filtered.map((item) => resolveTwitterPrimarySource(item)));
+  const resolved = await resolveTwitterPrimarySources(filtered);
   console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);
   return sortNewestFirst(resolved);
 }

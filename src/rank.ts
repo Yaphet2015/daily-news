@@ -1,5 +1,5 @@
 import type { CollectedItem, RankedItem, ScoreBreakdown } from './types.js';
-import { AUTHOR_PENALTY_RULES } from './ranking-preferences.js';
+import { AUTHOR_RANKING_RULES } from './ranking-preferences.js';
 
 const SUBSTANCE_KEYWORDS = [
   'release',
@@ -51,14 +51,19 @@ function normalizeAuthorKey(username?: string): string | undefined {
   return username.trim().replace(/^@+/, '').toLowerCase();
 }
 
-function getAuthorPenalty(item: CollectedItem): { penalty: number; reason?: string } {
+function getAuthorAdjustment(item: CollectedItem): { penalty: number; bonus: number; reason?: string } {
   const authorKey = normalizeAuthorKey(item.author.username);
-  if (!authorKey) return { penalty: 0 };
+  if (!authorKey) return { penalty: 0, bonus: 0 };
 
-  const rule = AUTHOR_PENALTY_RULES[authorKey];
-  if (!rule) return { penalty: 0 };
+  const rule = AUTHOR_RANKING_RULES[authorKey];
+  if (!rule) return { penalty: 0, bonus: 0 };
 
-  return { penalty: rule.penalty, reason: rule.reason };
+  return { penalty: rule.penalty ?? 0, bonus: rule.bonus ?? 0, reason: rule.reason };
+}
+
+function extractAuthorReason(decisionReasons: string[]): string | undefined {
+  const wrapped = decisionReasons.find((reason) => reason.startsWith('作者偏见:'));
+  return wrapped?.slice('作者偏见:'.length);
 }
 
 function computeFreshnessScore(item: CollectedItem, newestTimestamp: number): number {
@@ -83,7 +88,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
   const hasMedia = item.media.length > 0;
   const hasBrief = Boolean(item.readerBrief);
   const hasLinkedSource = Boolean(item.linkedSource);
-  const { penalty: authorPenalty } = getAuthorPenalty(item);
+  const { penalty: authorPenalty, bonus: authorBonus } = getAuthorAdjustment(item);
 
   const substance = clamp(
     (text.length >= 80 ? 10 : 4) +
@@ -104,7 +109,8 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
   const sourceSignal = clamp(
     (item.source === 'substack' ? 8 : 4) +
       (item.author.username ? 2 : 0) +
-      (item.sourceResolution?.decision === 'use_linked_source' ? 3 : 0),
+      (item.sourceResolution?.decision === 'use_linked_source' ? 3 : 0) +
+      authorBonus,
     0,
     15,
   );
@@ -171,17 +177,17 @@ function buildDecisionReasons(
 ): string[] {
   const reasons: string[] = [];
 
-  if (breakdown.substance >= 16) reasons.push('high_substance');
-  if (breakdown.evidence >= 10) reasons.push('strong_evidence');
-  if (breakdown.actionability >= 5) reasons.push('actionable_tutorial');
-  if (breakdown.freshness >= 8) reasons.push('fresh_high_signal');
-  if (breakdown.sourceSignal >= 6) reasons.push('official_source');
-  if (breakdown.substance < 12) reasons.push('low_substance');
-  if (breakdown.evidence < 6) reasons.push('weak_evidence');
+  if (breakdown.substance >= 16) reasons.push('高信息密度');
+  if (breakdown.evidence >= 10) reasons.push('有理有据');
+  if (breakdown.actionability >= 5) reasons.push('实践教程');
+  if (breakdown.freshness >= 8) reasons.push('新');
+  if (breakdown.sourceSignal >= 6) reasons.push('官方');
+  if (breakdown.substance < 12) reasons.push('低质量内容');
+  if (breakdown.evidence < 6) reasons.push('弱证据');
   if (isPromotional) reasons.push('promotional');
-  if (engagementReason) reasons.push(engagementReason);
-  if (authorReason) reasons.push(authorReason);
-  if (duplicateOf) reasons.push(`duplicate_of:${duplicateOf}`);
+  if (engagementReason) reasons.push(`互动支持:${engagementReason}`);
+  if (authorReason) reasons.push(`作者偏见:${authorReason}`);
+  if (duplicateOf) reasons.push(`重复内容:${duplicateOf}`);
 
   return Array.from(new Set(reasons));
 }
@@ -199,8 +205,10 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
 
     const [primary, ...duplicates] = [...group].sort((a, b) => b.priorityScore - a.priorityScore);
     for (const item of duplicates) {
-      const authorReason = item.decisionReasons.find((reason) => reason.startsWith('deprioritized_author:'));
-      const engagementReason = item.decisionReasons.find((reason) => reason === 'engagement_supporting_only');
+      const authorReason = extractAuthorReason(item.decisionReasons);
+      const engagementReason = item.decisionReasons
+        .find((reason) => reason.startsWith('互动支持:'))
+        ?.slice('互动支持:'.length);
       item.duplicateOf = primary.id;
       item.scoreBreakdown.novelty = 0;
       item.editorialScore = toEditorialScore(item.scoreBreakdown);
@@ -228,8 +236,10 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
 
     const [primary, ...duplicates] = [...group].sort((a, b) => b.priorityScore - a.priorityScore);
     for (const item of duplicates) {
-      const authorReason = item.decisionReasons.find((reason) => reason.startsWith('deprioritized_author:'));
-      const engagementReason = item.decisionReasons.find((reason) => reason === 'engagement_supporting_only');
+      const authorReason = extractAuthorReason(item.decisionReasons);
+      const engagementReason = item.decisionReasons
+        .find((reason) => reason.startsWith('互动支持:'))
+        ?.slice('互动支持:'.length);
       const isPromotional = item.decisionReasons.includes('promotional');
       item.duplicateOf = primary.id;
       item.scoreBreakdown.novelty = 0;
@@ -262,7 +272,7 @@ export function rankItems(items: CollectedItem[]): RankedItem[] {
     const scoreBreakdown = computeEditorialBreakdown(item, newestTimestamp);
     const editorialScore = toEditorialScore(scoreBreakdown);
     const { score: engagementScore, reason: engagementReason } = computeEngagementScore(item, scoreBreakdown);
-    const { reason: authorReason } = getAuthorPenalty(item);
+    const { reason: authorReason } = getAuthorAdjustment(item);
     const priorityScore = clamp(Math.round(editorialScore * 0.75 + engagementScore * 0.25), 0, 100);
 
     return {

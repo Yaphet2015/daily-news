@@ -34,8 +34,8 @@ test('rankItems prioritizes substantive evidence-backed items over promotional p
 
   assert.equal(ranked[0]?.id, 'high-signal');
   assert.ok(ranked[0].priorityScore > ranked[1].priorityScore);
-  assert.match(ranked[0].decisionReasons.join(' '), /high_substance/);
-  assert.match(ranked[1].decisionReasons.join(' '), /promotional|low_substance/);
+  assert.match(ranked[0].decisionReasons.join(' '), /高信息密度/);
+  assert.match(ranked[1].decisionReasons.join(' '), /promotional|低质量内容/);
 });
 
 test('rankItems marks and penalizes weaker duplicates', () => {
@@ -60,7 +60,7 @@ test('rankItems marks and penalizes weaker duplicates', () => {
   assert.ok(primary);
   assert.ok(duplicate);
   assert.equal(duplicate?.duplicateOf, 'primary');
-  assert.match(duplicate?.decisionReasons.join(' ') ?? '', /duplicate_of:primary/);
+  assert.match(duplicate?.decisionReasons.join(' ') ?? '', /重复内容:primary/);
   assert.ok((primary?.priorityScore ?? 0) > (duplicate?.priorityScore ?? 0));
 });
 
@@ -152,4 +152,51 @@ test('rankItems keeps deprioritized authors in results instead of hard filtering
   assert.equal(ranked[0]?.id, 'tom');
   assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /deprioritized_author:tom_doerr/);
   assert.ok((ranked[0]?.priorityScore ?? 0) < 60);
+});
+
+test('rankItems boosts configured official authors for otherwise similar tweets', () => {
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'openai',
+      url: 'https://x.com/OpenAI/status/8',
+      author: { name: 'OpenAI', username: 'OpenAI' },
+      text: 'GPT model update with API docs, pricing notes, and benchmark details https://example.com/openai',
+      likeCount: 80,
+      replyCount: 9,
+      repostCount: 11,
+      quoteCount: 3,
+    }),
+    makeTwitterItem({
+      id: 'anthropic',
+      url: 'https://x.com/AnthropicAI/status/9',
+      author: { name: 'Anthropic', username: 'AnthropicAI' },
+      text: 'Claude model update with API docs, pricing notes, and benchmark details https://example.com/anthropic',
+      likeCount: 78,
+      replyCount: 8,
+      repostCount: 10,
+      quoteCount: 3,
+    }),
+    makeTwitterItem({
+      id: 'peer',
+      url: 'https://x.com/alice/status/10',
+      author: { name: 'Alice', username: 'alice' },
+      text: 'Model update with API docs, pricing notes, and benchmark details https://example.com/peer',
+      likeCount: 82,
+      replyCount: 9,
+      repostCount: 11,
+      quoteCount: 3,
+    }),
+  ]);
+
+  const openai = ranked.find((item) => item.id === 'openai');
+  const anthropic = ranked.find((item) => item.id === 'anthropic');
+  const peer = ranked.find((item) => item.id === 'peer');
+
+  assert.ok(openai);
+  assert.ok(anthropic);
+  assert.ok(peer);
+  assert.ok((openai?.priorityScore ?? 0) > (peer?.priorityScore ?? 0));
+  assert.ok((anthropic?.priorityScore ?? 0) > (peer?.priorityScore ?? 0));
+  assert.match(openai?.decisionReasons.join(' ') ?? '', /official_author:openai/);
+  assert.match(anthropic?.decisionReasons.join(' ') ?? '', /official_author:anthropicai/);
 });

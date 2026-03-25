@@ -371,6 +371,188 @@ test('fetchTwitterReplies falls back to empty reply context when twitter-cli rep
   assert.deepEqual(replies, []);
 });
 
+test('shouldFetchRepliesForPrimarySource only enables reply lookup for wrapper-like tweets without outbound links', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).shouldFetchRepliesForPrimarySource, 'function');
+
+  const shouldFetchRepliesForPrimarySource = (collectModule as Record<string, Function>)
+    .shouldFetchRepliesForPrimarySource;
+
+  assert.equal(
+    shouldFetchRepliesForPrimarySource({
+      id: 'wrapper',
+      source: 'twitter',
+      text: 'Read more here',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/wrapper',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldFetchRepliesForPrimarySource({
+      id: 'already-has-link',
+      source: 'twitter',
+      text: 'Read more here',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/already-has-link',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: ['https://docs.example.com/launch'],
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldFetchRepliesForPrimarySource({
+      id: 'non-wrapper',
+      source: 'twitter',
+      text:
+        'I spent the morning comparing the new version with the previous one. The onboarding flow is cleaner. The benchmark methodology is still weak. My main takeaway is that the product direction improved even if the marketing copy oversells it.',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/non-wrapper',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    }),
+    false,
+  );
+});
+
+test('resolveTwitterPrimarySource skips reply lookup for non-wrapper tweets without outbound links', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-no-reply-fetch',
+      source: 'twitter',
+      text:
+        'I spent the morning comparing the new version with the previous one. The onboarding flow is cleaner. The benchmark methodology is still weak. My main takeaway is that the product direction improved even if the marketing copy oversells it.',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-no-reply-fetch',
+      originUrl: 'https://x.com/alice/status/tw-no-reply-fetch',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      fetchTwitterReplies: async () => {
+        throw new Error('should not fetch replies');
+      },
+    },
+  );
+
+  assert.deepEqual(resolved.replyContext, []);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
+});
+
+test('resolveTwitterPrimarySource uses the latest reply link when wrapper tweets have no outbound links', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-latest-reply',
+      source: 'twitter',
+      text: 'Read more here',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-latest-reply',
+      originUrl: 'https://x.com/alice/status/tw-latest-reply',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      fetchTwitterReplies: async (_item: unknown, maxReplies: number) => {
+        assert.equal(maxReplies, 1);
+        return [
+          {
+            id: 'reply-1',
+            text: '@alice official docs',
+            author: { name: 'Alice', username: 'alice' },
+            publishedAt: '2026-03-15T09:01:00Z',
+            url: 'https://x.com/alice/status/reply-1',
+            outboundLinks: ['https://docs.example.com/launch'],
+          },
+        ];
+      },
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Docs Launch',
+        description: 'Official docs for the launch',
+        excerpt: 'Official docs for the launch with details.',
+        domain: 'docs.example.com',
+        via: 'reply',
+      }),
+    },
+  );
+
+  assert.equal(resolved.url, 'https://docs.example.com/launch');
+  assert.deepEqual(resolved.replyContext, [
+    {
+      id: 'reply-1',
+      text: '@alice official docs',
+      author: { name: 'Alice', username: 'alice' },
+      publishedAt: '2026-03-15T09:01:00Z',
+      url: 'https://x.com/alice/status/reply-1',
+      outboundLinks: ['https://docs.example.com/launch'],
+    },
+  ]);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'reply_wrapper' });
+});
+
+test('resolveTwitterPrimarySources processes reply enrichment sequentially', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySources, 'function');
+
+  const resolveTwitterPrimarySources = (collectModule as Record<string, Function>).resolveTwitterPrimarySources;
+  let inFlight = 0;
+  let maxInFlight = 0;
+
+  const resolved = await resolveTwitterPrimarySources(
+    [
+      {
+        id: 'tw-1',
+        source: 'twitter',
+        text: 'Read more here',
+        publishedAt: '2026-03-15T09:00:00Z',
+        url: 'https://x.com/alice/status/tw-1',
+        originUrl: 'https://x.com/alice/status/tw-1',
+        author: { name: 'Alice', username: 'alice' },
+        media: [],
+        outboundLinks: [],
+      },
+      {
+        id: 'tw-2',
+        source: 'twitter',
+        text: 'Read more here too',
+        publishedAt: '2026-03-15T09:00:30Z',
+        url: 'https://x.com/bob/status/tw-2',
+        originUrl: 'https://x.com/bob/status/tw-2',
+        author: { name: 'Bob', username: 'bob' },
+        media: [],
+        outboundLinks: [],
+      },
+    ],
+    {
+      resolveTwitterPrimarySource: async (item: { id: string }) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return {
+          id: item.id,
+        };
+      },
+    },
+  );
+
+  assert.equal(maxInFlight, 1);
+  assert.deepEqual(resolved.map((item: { id: string }) => item.id), ['tw-1', 'tw-2']);
+});
+
 test('resolveTwitterPrimarySource keeps the origin tweet when linked-page fetch fails', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
 
