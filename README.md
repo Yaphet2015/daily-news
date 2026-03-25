@@ -56,6 +56,8 @@ npm run generate
 | `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 
+说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。
+
 **获取 twitterapi.io API Key：**
 1. 前往 [https://twitterapi.io](https://twitterapi.io) 注册账号
 2. 进入 Dashboard → API Keys，创建一个新 Key

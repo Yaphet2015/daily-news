@@ -282,6 +282,195 @@ test('buildTwitterCliCommand exports HTTP_PROXY for twitter-cli', () => {
   );
 });
 
+test('parseTwitterCliReplyPayload accepts wrapped twitter-cli reply payloads', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).parseTwitterCliReplyPayload, 'function');
+
+  const parseTwitterCliReplyPayload = (collectModule as Record<string, Function>).parseTwitterCliReplyPayload;
+  const parsed = parseTwitterCliReplyPayload({
+    ok: true,
+    data: [
+      {
+        id: 'root',
+        text: 'root tweet',
+        author: { id: 'u0', name: 'Alice', screenName: 'alice' },
+        createdAt: '2026-03-15T09:00:00Z',
+        urls: [],
+      },
+      {
+        id: 'reply-1',
+        text: 'reply tweet',
+        author: { id: 'u1', name: 'Bob', screenName: 'bob' },
+        createdAt: '2026-03-15T09:01:00Z',
+        urls: ['https://docs.example.com/launch?utm_source=x'],
+      },
+    ],
+  });
+
+  assert.deepEqual(parsed.map((tweet: { id: string }) => tweet.id), ['root', 'reply-1']);
+});
+
+test('parseTwitterCliReplyPayload accepts legacy bare reply arrays', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).parseTwitterCliReplyPayload, 'function');
+
+  const parseTwitterCliReplyPayload = (collectModule as Record<string, Function>).parseTwitterCliReplyPayload;
+  const parsed = parseTwitterCliReplyPayload([
+    {
+      id: 'root',
+      text: 'root tweet',
+      author: { id: 'u0', name: 'Alice', screenName: 'alice' },
+      createdAt: '2026-03-15T09:00:00Z',
+      urls: [],
+    },
+    {
+      id: 'reply-1',
+      text: 'reply tweet',
+      author: { id: 'u1', name: 'Bob', screenName: 'bob' },
+      createdAt: '2026-03-15T09:01:00Z',
+      urls: [],
+    },
+  ]);
+
+  assert.deepEqual(parsed.map((tweet: { id: string }) => tweet.id), ['root', 'reply-1']);
+});
+
+test('parseTwitterCliReplyPayload rejects wrapped twitter-cli reply payloads with ok=false', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).parseTwitterCliReplyPayload, 'function');
+
+  const parseTwitterCliReplyPayload = (collectModule as Record<string, Function>).parseTwitterCliReplyPayload;
+
+  assert.throws(
+    () => parseTwitterCliReplyPayload({ ok: false, data: [], error: 'rate limited' }),
+    /twitter-cli replies returned ok=false/i,
+  );
+});
+
+test('fetchTwitterReplies falls back to empty reply context when twitter-cli reply parsing fails', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).fetchTwitterReplies, 'function');
+
+  const fetchTwitterReplies = (collectModule as Record<string, Function>).fetchTwitterReplies;
+  const replies = await fetchTwitterReplies(
+    {
+      id: 'tw-replies',
+      source: 'twitter',
+      text: 'root tweet',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-replies',
+      originUrl: 'https://x.com/alice/status/tw-replies',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    },
+    3,
+    {
+      fetchTwitterRepliesViaCli: async () => {
+        throw new Error('twitter-cli replies returned ok=false');
+      },
+    },
+  );
+
+  assert.deepEqual(replies, []);
+});
+
+test('resolveTwitterPrimarySource keeps the origin tweet when linked-page fetch fails', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const item = {
+    id: 'tw-fail-open',
+    source: 'twitter',
+    text: 'Read more here',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-fail-open',
+    originUrl: 'https://x.com/alice/status/tw-fail-open',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: ['https://cursor.directory'],
+  };
+
+  const resolved = await resolveTwitterPrimarySource(item, {
+    fetchLinkedPage: async () => {
+      throw new Error('429 Too Many Requests');
+    },
+  });
+
+  assert.equal(resolved.url, item.originUrl);
+  assert.equal(resolved.linkedSource, undefined);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
+});
+
+test('resolveTwitterPrimarySource continues to later links after an earlier linked-page failure', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const item = {
+    id: 'tw-later-link',
+    source: 'twitter',
+    text: 'Read more here',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-later-link',
+    originUrl: 'https://x.com/alice/status/tw-later-link',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: ['https://cursor.directory', 'https://docs.example.com/launch'],
+  };
+
+  const resolved = await resolveTwitterPrimarySource(item, {
+    fetchLinkedPage: async (url: string) => {
+      if (url === 'https://cursor.directory') {
+        throw new Error('429 Too Many Requests');
+      }
+
+      return {
+        url,
+        title: 'Docs Launch',
+        description: 'Release notes and documentation for the launch',
+        excerpt: 'Release notes and documentation for the new launch.',
+        domain: 'docs.example.com',
+        via: 'tweet',
+      };
+    },
+  });
+
+  assert.equal(resolved.url, 'https://docs.example.com/launch');
+  assert.equal(resolved.sourceLabel, 'Docs Launch');
+  assert.deepEqual(resolved.linkedSource, {
+    url: 'https://docs.example.com/launch',
+    title: 'Docs Launch',
+    description: 'Release notes and documentation for the launch',
+    excerpt: 'Release notes and documentation for the new launch.',
+    domain: 'docs.example.com',
+    via: 'tweet',
+  });
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'tweet_wrapper' });
+});
+
+test('resolveTwitterPrimarySource falls back to the origin tweet when all linked pages fail', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const item = {
+    id: 'tw-all-fail',
+    source: 'twitter',
+    text: 'Read more here',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-all-fail',
+    originUrl: 'https://x.com/alice/status/tw-all-fail',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: ['https://cursor.directory', 'https://docs.example.com/launch'],
+  };
+
+  const resolved = await resolveTwitterPrimarySource(item, {
+    fetchLinkedPage: async () => {
+      throw new Error('blocked');
+    },
+  });
+
+  assert.equal(resolved.url, item.originUrl);
+  assert.equal(resolved.linkedSource, undefined);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
+});
+
 test('collectSubstackItems keeps only recent posts and honors global and per-publication caps', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSubstackItems, 'function');
 

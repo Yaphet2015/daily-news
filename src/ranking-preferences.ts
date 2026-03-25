@@ -5,7 +5,7 @@ export interface AuthorPenaltyRule {
 
 export const AUTHOR_PENALTY_RULES: Record<string, AuthorPenaltyRule> = {
   tom_doerr: {
-    penalty: 20,
+    penalty: 24,
     reason: 'deprioritized_author:tom_doerr',
   },
 };

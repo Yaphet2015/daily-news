@@ -48,6 +48,8 @@ interface TwitterCliOutput {
   data: TwitterCliTweet[];
 }
 
+type TwitterCliReplyPayload = TwitterCliTweet[] | TwitterCliOutput;
+
 interface TwitterApiTweet {
   id: string;
   text: string;
@@ -564,6 +566,15 @@ function buildGenericCurlArgs(url: string, proxy: string | undefined): string[] 
   ];
 }
 
+function summarizeError(error: unknown): string {
+  if (error instanceof Error) {
+    const [firstLine] = error.message.split('\n');
+    return firstLine?.trim() || error.name;
+  }
+
+  return String(error);
+}
+
 function stripTrackingTitle(value: string): string {
   return value.replace(/\s*[|\-]\s*(twitter|x)\s*$/i, '').trim();
 }
@@ -714,12 +725,19 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
   const normalizedUrl = normalizeExternalUrl(url);
   if (!normalizedUrl) return null;
 
-  const proxy = resolveHttpProxy();
-  const { stdout } = await execFileAsync(
-    'curl',
-    buildGenericCurlArgs(normalizedUrl, proxy),
-    { maxBuffer: 2 * 1024 * 1024 },
-  );
+  let stdout: string;
+  try {
+    const proxy = resolveHttpProxy();
+    const response = await execFileAsync(
+      'curl',
+      buildGenericCurlArgs(normalizedUrl, proxy),
+      { maxBuffer: 2 * 1024 * 1024 },
+    );
+    stdout = response.stdout;
+  } catch (error) {
+    console.warn(`[collect] 跳过外链抓取 ${normalizedUrl}: ${summarizeError(error)}`);
+    return null;
+  }
 
   const trimmed = stdout.trim();
   if (!trimmed) return null;
@@ -749,12 +767,39 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
   };
 }
 
+interface ResolveTwitterPrimarySourceOptions {
+  fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
+}
+
+interface FetchTwitterRepliesOptions {
+  fetchTwitterRepliesViaApi?: (tweetId: string, maxReplies: number) => Promise<ReplyContext[]>;
+  fetchTwitterRepliesViaCli?: (tweetId: string, maxReplies: number) => Promise<ReplyContext[]>;
+}
+
+export function parseTwitterCliReplyPayload(payload: TwitterCliReplyPayload): TwitterCliTweet[] {
+  if (Array.isArray(payload)) return payload;
+
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('twitter-cli replies payload is not an array or object');
+  }
+
+  if (!payload.ok) {
+    throw new Error('twitter-cli replies returned ok=false');
+  }
+
+  if (!Array.isArray(payload.data)) {
+    throw new Error('twitter-cli replies payload missing data array');
+  }
+
+  return payload.data;
+}
+
 async function fetchTwitterRepliesViaCli(tweetId: string, maxReplies: number): Promise<ReplyContext[]> {
   const proxy = resolveHttpProxy();
   const { stdout } = await execAsync(buildTwitterReplyCommand(tweetId, maxReplies, proxy), {
     maxBuffer: 10 * 1024 * 1024,
   });
-  const payload = JSON.parse(stdout) as TwitterCliTweet[];
+  const payload = parseTwitterCliReplyPayload(JSON.parse(stdout) as TwitterCliReplyPayload);
   return payload.slice(1, 1 + maxReplies).map((reply) => ({
     id: reply.id,
     text: reply.text,
@@ -905,28 +950,39 @@ async function collectViaApi(
   return tweets;
 }
 
-async function fetchTwitterReplies(item: CollectedItem, maxReplies = 3): Promise<ReplyContext[]> {
+export async function fetchTwitterReplies(
+  item: CollectedItem,
+  maxReplies = 3,
+  options: FetchTwitterRepliesOptions = {},
+): Promise<ReplyContext[]> {
   if (item.source !== 'twitter') return [];
+
+  const fetchTwitterRepliesViaApiImpl = options.fetchTwitterRepliesViaApi ?? fetchTwitterRepliesViaApi;
+  const fetchTwitterRepliesViaCliImpl = options.fetchTwitterRepliesViaCli ?? fetchTwitterRepliesViaCli;
 
   if (process.env.TWITTERAPI_KEY) {
     try {
-      return await fetchTwitterRepliesViaApi(item.id, maxReplies);
+      return await fetchTwitterRepliesViaApiImpl(item.id, maxReplies);
     } catch (error) {
       console.warn(`[collect] twitterapi replies 失败，回退到 twitter-cli: ${error}`);
     }
   }
 
   try {
-    return await fetchTwitterRepliesViaCli(item.id, maxReplies);
+    return await fetchTwitterRepliesViaCliImpl(item.id, maxReplies);
   } catch (error) {
     console.warn(`[collect] twitter-cli replies 失败，跳过 replies: ${error}`);
     return [];
   }
 }
 
-async function resolveTwitterPrimarySource(item: CollectedItem): Promise<CollectedItem> {
+export async function resolveTwitterPrimarySource(
+  item: CollectedItem,
+  options: ResolveTwitterPrimarySourceOptions = {},
+): Promise<CollectedItem> {
   if (item.source !== 'twitter') return item;
 
+  const fetchLinkedPageImpl = options.fetchLinkedPage ?? fetchLinkedPage;
   const tweetLinks = item.outboundLinks ?? [];
   const replyContext = tweetLinks.length > 0 ? [] : await fetchTwitterReplies(item, 3);
   const replyLinks = dedupeUrls(replyContext.flatMap((reply) => reply.outboundLinks));
@@ -942,7 +998,13 @@ async function resolveTwitterPrimarySource(item: CollectedItem): Promise<Collect
 
   const linkedSources: LinkedSource[] = [];
   for (const [index, link] of candidateLinks.entries()) {
-    const linkedSource = await fetchLinkedPage(link);
+    let linkedSource: LinkedSource | null;
+    try {
+      linkedSource = await fetchLinkedPageImpl(link);
+    } catch (error) {
+      console.warn(`[collect] 跳过外链抓取 ${link}: ${summarizeError(error)}`);
+      continue;
+    }
     if (!linkedSource) continue;
     linkedSources.push({
       ...linkedSource,
