@@ -16,13 +16,13 @@ test('formatSelectionLabel shows ranking metadata before a multi-line summary pr
       category: 'Product',
       media: [],
       priorityScore: 72,
-      decisionReasons: ['high_substance', 'strong_evidence'],
+      decisionReasons: ['高信息密度', '有理有据'],
     },
     0,
   );
 
   assert.match(label, /^ 1\. Launch\n/);
   assert.match(label, /twitter · OpenAI Docs · Alice/);
-  assert.match(label, /score 72 · high_substance, strong_evidence/);
+  assert.match(label, /优先级分 72 · 高信息密度, 有理有据/);
   assert.match(label, /      A{70}\n      A{70}\n      A{40}/);
 });

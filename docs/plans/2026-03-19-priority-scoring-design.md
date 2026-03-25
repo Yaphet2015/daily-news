@@ -171,20 +171,19 @@ Do not hard-delete duplicates before reporting; keep them visible in the report.
 
 Every ranked item should carry machine-readable `decisionReasons`. These are the canonical explanation surface for debugging and future UI.
 
-Recommended reason codes:
+Recommended reason phrases:
 
-- `high_substance`
-- `strong_evidence`
-- `official_source`
-- `actionable_tutorial`
-- `fresh_high_signal`
-- `duplicate_of:<item-id>`
-- `low_substance`
-- `weak_evidence`
-- `promotional`
-- `stale`
-- `engagement_supporting_only`
-- `below_cutoff`
+- `高信息密度`
+- `有理有据`
+- `官方`
+- `实践教程`
+- `新`
+- `重复内容:<item-id>`
+- `低质量内容`
+- `弱证据`
+- `宣发内容`
+- `互动支持:仅作辅助信号`
+- `作者规则:<规则说明>`
 
 These codes should be produced deterministically by the ranking layer.
 

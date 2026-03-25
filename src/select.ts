@@ -23,7 +23,7 @@ export function formatSelectionLabel(item: CuratedItem, index: number): string {
   const metadata = `${item.source} · ${item.attribution} · ${item.author}`;
   const rankingHint =
     typeof item.priorityScore === 'number'
-      ? `score ${item.priorityScore}` +
+      ? `优先级分 ${item.priorityScore}` +
         (item.decisionReasons?.length ? ` · ${item.decisionReasons.join(', ')}` : '')
       : null;
 

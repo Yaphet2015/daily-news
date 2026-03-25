@@ -52,7 +52,7 @@ test('buildCollectedItemsPayload includes ranking metadata when present', () => 
       editorialScore: 78,
       engagementScore: 15,
       priorityScore: 62,
-      decisionReasons: ['high_substance', 'strong_evidence'],
+      decisionReasons: ['高信息密度', '有理有据'],
       scoreBreakdown: {
         substance: 24,
         evidence: 16,
@@ -65,10 +65,10 @@ test('buildCollectedItemsPayload includes ranking metadata when present', () => 
     },
   ]);
 
-  assert.match(payload, /Priority Score: 62/);
-  assert.match(payload, /Editorial Score: 78/);
-  assert.match(payload, /Engagement Score: 15/);
-  assert.match(payload, /Decision Reasons: high_substance, strong_evidence/);
+  assert.match(payload, /优先级分: 62/);
+  assert.match(payload, /编辑分: 78/);
+  assert.match(payload, /互动分: 15/);
+  assert.match(payload, /决策依据: 高信息密度, 有理有据/);
 });
 
 test('attachReaderBriefs only invokes the reader for Substack items', async () => {
@@ -221,7 +221,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       editorialScore: 77,
       engagementScore: 0,
       priorityScore: 58,
-      decisionReasons: ['high_substance', 'strong_evidence'],
+      decisionReasons: ['高信息密度', '有理有据'],
       scoreBreakdown: {
         substance: 24,
         evidence: 14,
@@ -261,7 +261,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       editorialScore: 77,
       engagementScore: 0,
       priorityScore: 58,
-      decisionReasons: ['high_substance', 'strong_evidence'],
+      decisionReasons: ['高信息密度', '有理有据'],
       scoreBreakdown: {
         substance: 24,
         evidence: 14,
@@ -290,7 +290,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       attribution: 'OpenAI Docs',
       media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
       priorityScore: 58,
-      decisionReasons: ['high_substance', 'strong_evidence'],
+      decisionReasons: ['高信息密度', '有理有据'],
     },
     {
       id: 'tw-2',

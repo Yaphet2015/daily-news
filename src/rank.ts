@@ -62,8 +62,8 @@ function getAuthorAdjustment(item: CollectedItem): { penalty: number; bonus: num
 }
 
 function extractAuthorReason(decisionReasons: string[]): string | undefined {
-  const wrapped = decisionReasons.find((reason) => reason.startsWith('作者偏见:'));
-  return wrapped?.slice('作者偏见:'.length);
+  const wrapped = decisionReasons.find((reason) => reason.startsWith('作者规则:'));
+  return wrapped?.slice('作者规则:'.length);
 }
 
 function computeFreshnessScore(item: CollectedItem, newestTimestamp: number): number {
@@ -162,7 +162,7 @@ function computeEngagementScore(item: CollectedItem, breakdown: ScoreBreakdown):
 
   if (breakdown.substance < 12 || breakdown.evidence < 6) {
     score = Math.min(score, 8);
-    return { score, reason: 'engagement_supporting_only' };
+    return { score, reason: '仅作辅助信号' };
   }
 
   return { score };
@@ -184,9 +184,9 @@ function buildDecisionReasons(
   if (breakdown.sourceSignal >= 6) reasons.push('官方');
   if (breakdown.substance < 12) reasons.push('低质量内容');
   if (breakdown.evidence < 6) reasons.push('弱证据');
-  if (isPromotional) reasons.push('promotional');
+  if (isPromotional) reasons.push('宣发内容');
   if (engagementReason) reasons.push(`互动支持:${engagementReason}`);
-  if (authorReason) reasons.push(`作者偏见:${authorReason}`);
+  if (authorReason) reasons.push(`作者规则:${authorReason}`);
   if (duplicateOf) reasons.push(`重复内容:${duplicateOf}`);
 
   return Array.from(new Set(reasons));
@@ -240,7 +240,7 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
       const engagementReason = item.decisionReasons
         .find((reason) => reason.startsWith('互动支持:'))
         ?.slice('互动支持:'.length);
-      const isPromotional = item.decisionReasons.includes('promotional');
+      const isPromotional = item.decisionReasons.includes('宣发内容');
       item.duplicateOf = primary.id;
       item.scoreBreakdown.novelty = 0;
       item.editorialScore = toEditorialScore(item.scoreBreakdown);

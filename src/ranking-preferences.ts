@@ -7,14 +7,14 @@ export interface AuthorRankingRule {
 export const AUTHOR_RANKING_RULES: Record<string, AuthorRankingRule> = {
   tom_doerr: {
     penalty: 24,
-    reason: 'deprioritized_author:tom_doerr',
+    reason: '降权作者:tom_doerr',
   },
   openai: {
     bonus: 6,
-    reason: 'official_author:openai',
+    reason: 'openai官号',
   },
   anthropicai: {
     bonus: 6,
-    reason: 'official_author:anthropicai',
+    reason: 'anthropicai官号',
   },
 };

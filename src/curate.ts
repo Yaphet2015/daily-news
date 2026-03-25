@@ -250,10 +250,10 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
     .map((item, index) => {
       const rankingLines = isRankedItem(item)
         ? [
-            `Priority Score: ${item.priorityScore}`,
-            `Editorial Score: ${item.editorialScore}`,
-            `Engagement Score: ${item.engagementScore}`,
-            `Decision Reasons: ${item.decisionReasons.join(', ') || 'none'}`,
+            `优先级分: ${item.priorityScore}`,
+            `编辑分: ${item.editorialScore}`,
+            `互动分: ${item.engagementScore}`,
+            `决策依据: ${item.decisionReasons.join(', ') || '无'}`,
           ]
         : [];
 

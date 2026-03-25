@@ -35,7 +35,7 @@ test('rankItems prioritizes substantive evidence-backed items over promotional p
   assert.equal(ranked[0]?.id, 'high-signal');
   assert.ok(ranked[0].priorityScore > ranked[1].priorityScore);
   assert.match(ranked[0].decisionReasons.join(' '), /高信息密度/);
-  assert.match(ranked[1].decisionReasons.join(' '), /promotional|低质量内容/);
+  assert.match(ranked[1].decisionReasons.join(' '), /宣发内容|低质量内容/);
 });
 
 test('rankItems marks and penalizes weaker duplicates', () => {
@@ -89,7 +89,7 @@ test('engagement helps break ties but does not overcome weak substance', () => {
 
   assert.equal(ranked[0]?.id, 'useful');
   assert.ok(ranked[0].priorityScore > ranked[1].priorityScore);
-  assert.match(ranked[1].decisionReasons.join(' '), /engagement_supporting_only|low_substance/);
+  assert.match(ranked[1].decisionReasons.join(' '), /互动支持:仅作辅助信号|低质量内容/);
 });
 
 test('getCandidatePoolSize keeps the final model input bounded', () => {
@@ -130,8 +130,8 @@ test('rankItems strongly deprioritizes configured authors for otherwise similar 
   assert.ok(tom);
   assert.ok(peer);
   assert.ok((peer?.priorityScore ?? 0) > (tom?.priorityScore ?? 0));
-  assert.match(tom?.decisionReasons.join(' ') ?? '', /deprioritized_author:tom_doerr/);
-  assert.doesNotMatch(tom?.decisionReasons.join(' ') ?? '', /promotional/);
+  assert.match(tom?.decisionReasons.join(' ') ?? '', /作者规则:降权作者:tom_doerr/);
+  assert.doesNotMatch(tom?.decisionReasons.join(' ') ?? '', /宣发内容/);
 });
 
 test('rankItems keeps deprioritized authors in results instead of hard filtering them out', () => {
@@ -150,7 +150,7 @@ test('rankItems keeps deprioritized authors in results instead of hard filtering
 
   assert.equal(ranked.length, 1);
   assert.equal(ranked[0]?.id, 'tom');
-  assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /deprioritized_author:tom_doerr/);
+  assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /作者规则:降权作者:tom_doerr/);
   assert.ok((ranked[0]?.priorityScore ?? 0) < 60);
 });
 
@@ -197,6 +197,6 @@ test('rankItems boosts configured official authors for otherwise similar tweets'
   assert.ok(peer);
   assert.ok((openai?.priorityScore ?? 0) > (peer?.priorityScore ?? 0));
   assert.ok((anthropic?.priorityScore ?? 0) > (peer?.priorityScore ?? 0));
-  assert.match(openai?.decisionReasons.join(' ') ?? '', /official_author:openai/);
-  assert.match(anthropic?.decisionReasons.join(' ') ?? '', /official_author:anthropicai/);
+  assert.match(openai?.decisionReasons.join(' ') ?? '', /作者规则:openai官号/);
+  assert.match(anthropic?.decisionReasons.join(' ') ?? '', /作者规则:anthropicai官号/);
 });
