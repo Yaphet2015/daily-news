@@ -41,6 +41,14 @@ interface TwitterCliTweet {
   replyCount?: number;
   repostCount?: number;
   quoteCount?: number;
+  quotedTweet?: {
+    id?: string;
+    text?: string;
+    author?: {
+      name?: string;
+      screenName?: string;
+    };
+  };
 }
 
 interface TwitterCliOutput {
@@ -179,6 +187,10 @@ function isTwitterDomain(hostname: string): boolean {
   return normalized === 'x.com' || normalized === 'twitter.com' || normalized === 't.co';
 }
 
+function isTwitterShortener(hostname: string): boolean {
+  return normalizeDomain(hostname) === 't.co';
+}
+
 export function normalizeExternalUrl(raw: string): string | null {
   try {
     const parsed = new URL(raw);
@@ -201,10 +213,15 @@ export function normalizeExternalUrl(raw: string): string | null {
 }
 
 function extractUrlsFromText(text: string): string[] {
-  return Array.from(text.matchAll(/https?:\/\/\S+/gi))
-    .map((match) => match[0].replace(/[),.;!?]+$/g, ''))
+  return extractRawUrlsFromText(text)
     .map((value) => normalizeExternalUrl(value))
     .flatMap((value) => (value ? [value] : []));
+}
+
+function extractRawUrlsFromText(text: string): string[] {
+  return dedupeUrls(
+    Array.from(text.matchAll(/https?:\/\/\S+/gi)).map((match) => match[0].replace(/[),.;!?]+$/g, '')),
+  );
 }
 
 function dedupeUrls(urls: string[]): string[] {
@@ -229,6 +246,72 @@ function extractTwitterApiUrls(tweet: Pick<TwitterApiTweet, 'entities' | 'text'>
 function extractTwitterCliUrls(tweet: Pick<TwitterCliTweet, 'urls' | 'text'>): string[] {
   const structured = extractStructuredUrls(tweet.urls ?? []);
   return structured.length > 0 ? structured : extractUrlsFromText(tweet.text);
+}
+
+function normalizeTwitterUrl(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (!isTwitterDomain(parsed.hostname) || isTwitterShortener(parsed.hostname)) return null;
+    parsed.hash = '';
+    parsed.hostname = 'x.com';
+
+    const paramsToDrop = ['ref', 's'];
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (key.toLowerCase().startsWith('utm_') || paramsToDrop.includes(key.toLowerCase())) {
+        parsed.searchParams.delete(key);
+      }
+    }
+
+    const normalized = parsed.toString();
+    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+  } catch {
+    return null;
+  }
+}
+
+function buildEmbeddedLinkedSourceFromTwitterUrl(
+  raw: string,
+  hints: { title?: string; description?: string; excerpt?: string } = {},
+): LinkedSource | undefined {
+  const normalizedUrl = normalizeTwitterUrl(raw);
+  if (!normalizedUrl) return undefined;
+
+  const parsed = new URL(normalizedUrl);
+  const statusMatch = parsed.pathname.match(/^\/([^/]+)\/status\/([^/?#]+)/i);
+  const articleMatch = parsed.pathname.match(/^\/i\/article\/([^/?#]+)/i);
+
+  if (!statusMatch && !articleMatch) return undefined;
+
+  const title =
+    hints.title?.trim() ||
+    (statusMatch?.[1] ? `@${statusMatch[1]}` : articleMatch ? 'X Article' : undefined);
+  const excerpt = hints.excerpt?.trim() || undefined;
+  const description = hints.description?.trim() || undefined;
+
+  return {
+    url: normalizedUrl,
+    title,
+    description,
+    excerpt,
+    domain: normalizeDomain(parsed.hostname),
+    via: 'quote',
+  };
+}
+
+function buildEmbeddedLinkedSourceFromQuotedTweet(
+  tweet: Pick<TwitterCliTweet, 'quotedTweet'>,
+): LinkedSource | undefined {
+  const quotedTweet = tweet.quotedTweet;
+  const quoteId = quotedTweet?.id?.trim();
+  const quoteAuthor = quotedTweet?.author?.screenName?.trim();
+  if (!quoteId || !quoteAuthor) return undefined;
+
+  return buildEmbeddedLinkedSourceFromTwitterUrl(buildTweetUrl(quoteAuthor, quoteId), {
+    title: quotedTweet.author?.name?.trim() || `@${quoteAuthor}`,
+    description: `Quoted X post from @${quoteAuthor}`,
+    excerpt: quotedTweet.text?.trim(),
+  });
 }
 
 function toOptionalNumber(value: unknown): number | undefined {
@@ -709,6 +792,78 @@ function shouldKeepOriginTweet(item: CollectedItem, linkedSource: LinkedSource):
   return !looksLikeWrapperText(text) && !hasMeaningfulOverlap(text, pageContext);
 }
 
+function buildResolveUrlCurlArgs(url: string, proxy: string | undefined): string[] {
+  return [
+    '-sSLI',
+    '--connect-timeout',
+    '10',
+    '--max-time',
+    '20',
+    ...(proxy ? ['--proxy', proxy] : []),
+    '-o',
+    '/dev/null',
+    '-w',
+    '%{url_effective}',
+    url,
+  ];
+}
+
+async function resolveShortUrl(url: string): Promise<string | null> {
+  const proxy = resolveHttpProxy();
+  try {
+    const { stdout } = await execFileAsync('curl', buildResolveUrlCurlArgs(url, proxy), {
+      maxBuffer: 256 * 1024,
+    });
+    const resolved = stdout.trim();
+    return resolved.length > 0 ? resolved : null;
+  } catch (error) {
+    console.warn(`[collect] 跳过短链接解析 ${url}: ${summarizeError(error)}`);
+    return null;
+  }
+}
+
+async function enrichTwitterTextCandidates(
+  item: CollectedItem,
+  resolveShortUrlImpl: (url: string) => Promise<string | null>,
+): Promise<Pick<CollectedItem, 'outboundLinks' | 'embeddedLinkedSource'>> {
+  const outboundLinks = dedupeUrls(item.outboundLinks ?? []);
+  let embeddedLinkedSource = item.embeddedLinkedSource;
+
+  if (outboundLinks.length > 0 && embeddedLinkedSource) {
+    return { outboundLinks, embeddedLinkedSource };
+  }
+
+  for (const rawUrl of extractRawUrlsFromText(item.text)) {
+    let candidateUrl = rawUrl;
+
+    try {
+      const parsed = new URL(rawUrl);
+      if (isTwitterShortener(parsed.hostname)) {
+        const resolved = await resolveShortUrlImpl(rawUrl);
+        if (!resolved) continue;
+        candidateUrl = resolved;
+      }
+    } catch {
+      continue;
+    }
+
+    const normalizedExternal = normalizeExternalUrl(candidateUrl);
+    if (normalizedExternal) {
+      outboundLinks.push(normalizedExternal);
+      continue;
+    }
+
+    if (!embeddedLinkedSource) {
+      embeddedLinkedSource = buildEmbeddedLinkedSourceFromTwitterUrl(candidateUrl);
+    }
+  }
+
+  return {
+    outboundLinks: dedupeUrls(outboundLinks),
+    embeddedLinkedSource,
+  };
+}
+
 export function resolveTwitterLinkedSource(
   item: CollectedItem,
   linkedSources: LinkedSource[],
@@ -794,6 +949,7 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
 interface ResolveTwitterPrimarySourceOptions {
   fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
   fetchTwitterReplies?: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>;
+  resolveShortUrl?: (url: string) => Promise<string | null>;
 }
 
 interface FetchTwitterRepliesOptions {
@@ -1026,14 +1182,45 @@ export async function resolveTwitterPrimarySource(
 
   const fetchLinkedPageImpl = options.fetchLinkedPage ?? fetchLinkedPage;
   const fetchTwitterRepliesImpl = options.fetchTwitterReplies ?? fetchTwitterReplies;
-  const tweetLinks = item.outboundLinks ?? [];
-  const replyContext = shouldFetchRepliesForPrimarySource(item) ? await fetchTwitterRepliesImpl(item, 1) : [];
+  const resolveShortUrlImpl = options.resolveShortUrl ?? resolveShortUrl;
+  const enrichedCandidates = await enrichTwitterTextCandidates(item, resolveShortUrlImpl);
+  const enrichedItem = {
+    ...item,
+    outboundLinks: enrichedCandidates.outboundLinks,
+    embeddedLinkedSource: enrichedCandidates.embeddedLinkedSource ?? item.embeddedLinkedSource,
+  };
+  const tweetLinks = enrichedItem.outboundLinks ?? [];
+
+  const useEmbeddedLinkedSource = (replyContext: ReplyContext[] = []): CollectedItem => {
+    const embeddedLinkedSource = enrichedItem.embeddedLinkedSource!;
+    return {
+      ...enrichedItem,
+      url: embeddedLinkedSource.url,
+      sourceLabel: resolveSourceLabel(embeddedLinkedSource),
+      linkedSource: embeddedLinkedSource,
+      replyContext,
+      sourceResolution: { decision: 'use_linked_source', reason: 'quote_wrapper' },
+    };
+  };
+
+  if (tweetLinks.length === 0 && enrichedItem.embeddedLinkedSource) {
+    return useEmbeddedLinkedSource([]);
+  }
+
+  const replyContext =
+    tweetLinks.length === 0 && shouldFetchRepliesForPrimarySource(enrichedItem)
+      ? await fetchTwitterRepliesImpl(enrichedItem, 1)
+      : [];
   const replyLinks = dedupeUrls(replyContext.flatMap((reply) => reply.outboundLinks));
   const candidateLinks = tweetLinks.length > 0 ? tweetLinks : replyLinks;
 
   if (candidateLinks.length === 0) {
+    if (enrichedItem.embeddedLinkedSource) {
+      return useEmbeddedLinkedSource(replyContext);
+    }
+
     return {
-      ...item,
+      ...enrichedItem,
       replyContext,
       sourceResolution: { decision: 'keep_origin', reason: 'no_linked_source' },
     };
@@ -1057,15 +1244,19 @@ export async function resolveTwitterPrimarySource(
 
   const resolved = resolveTwitterLinkedSource(item, linkedSources);
   if (!resolved.linkedSource) {
+    if (enrichedItem.embeddedLinkedSource) {
+      return useEmbeddedLinkedSource(replyContext);
+    }
+
     return {
-      ...item,
+      ...enrichedItem,
       replyContext,
       sourceResolution: resolved.sourceResolution,
     };
   }
 
   return {
-    ...item,
+    ...enrichedItem,
     url: resolved.linkedSource.url,
     sourceLabel: resolved.sourceLabel,
     linkedSource: resolved.linkedSource,
@@ -1131,6 +1322,7 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
     url: originUrl,
     originUrl,
     outboundLinks: extractTwitterCliUrls(tweet),
+    embeddedLinkedSource: buildEmbeddedLinkedSourceFromQuotedTweet(tweet),
     media: Array.isArray(tweet.media)
       ? tweet.media.flatMap((item) => {
           const normalized = normalizeMediaItem(item);

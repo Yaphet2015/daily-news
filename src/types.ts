@@ -43,7 +43,7 @@ export interface LinkedSource {
   description?: string;
   excerpt?: string;
   domain: string;
-  via: 'tweet' | 'reply';
+  via: 'tweet' | 'reply' | 'quote';
 }
 
 export interface SourceResolution {
@@ -66,6 +66,7 @@ export interface CollectedItem {
   body?: string;
   media: MediaAsset[];
   outboundLinks?: string[];
+  embeddedLinkedSource?: LinkedSource;
   replyContext?: ReplyContext[];
   linkedSource?: LinkedSource;
   sourceResolution?: SourceResolution;

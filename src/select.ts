@@ -26,11 +26,15 @@ export function formatSelectionLabel(item: CuratedItem, index: number): string {
       ? `优先级分 ${item.priorityScore}` +
         (item.decisionReasons?.length ? ` · ${item.decisionReasons.join(', ')}` : '')
       : null;
+  const originUrl = item.originUrl ?? item.url;
+  const resolvedUrl = item.originUrl && item.originUrl !== item.url ? `来源: ${item.url}` : null;
 
   return [
     `${String(index + 1).padStart(2, ' ')}. ${item.title}`,
     `      ${metadata}`,
     rankingHint ? `      ${rankingHint}` : null,
+    `      原帖: ${originUrl}`,
+    resolvedUrl ? `      ${resolvedUrl}` : null,
     ...formatPreview(item.summary).map((line) => `      ${line}`),
   ]
     .filter(Boolean)

@@ -39,6 +39,38 @@ test('mapTwitterCliTweet preserves structured outbound links for later source re
   assert.deepEqual(tweet.outboundLinks, ['https://docs.example.com/launch']);
 });
 
+test('mapTwitterCliTweet preserves embedded quoted X sources for later source resolution', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: '1c',
+    text: 'Complete guide https://t.co/quoted',
+    author: {
+      id: 'u1c',
+      name: 'Alice',
+      screenName: 'alice',
+    },
+    createdAt: '2026-03-15T00:00:00Z',
+    media: [],
+    urls: [],
+    quotedTweet: {
+      id: 'quoted-1',
+      text: 'The full guide lives here',
+      author: {
+        name: 'AI Edge',
+        screenName: 'aiedge_',
+      },
+    },
+  } as never);
+
+  assert.deepEqual(tweet.embeddedLinkedSource, {
+    url: 'https://x.com/aiedge_/status/quoted-1',
+    title: 'AI Edge',
+    description: 'Quoted X post from @aiedge_',
+    excerpt: 'The full guide lives here',
+    domain: 'x.com',
+    via: 'quote',
+  });
+});
+
 test('mapTwitterCliTweet preserves mixed media from twitter-cli', () => {
   const tweet = collectModule.mapTwitterCliTweet({
     id: '2',
@@ -502,6 +534,124 @@ test('resolveTwitterPrimarySource uses the latest reply link when wrapper tweets
     },
   ]);
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'reply_wrapper' });
+});
+
+test('resolveTwitterPrimarySource resolves text-only t.co links into outboundLinks and primary source', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-text-short-link',
+      source: 'twitter',
+      text: 'Read more here https://t.co/short',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-text-short-link',
+      originUrl: 'https://x.com/alice/status/tw-text-short-link',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      resolveShortUrl: async (url: string) => {
+        assert.equal(url, 'https://t.co/short');
+        return 'https://docs.example.com/launch?utm_source=x';
+      },
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Docs Launch',
+        description: 'Official docs for the launch',
+        excerpt: 'Official docs for the launch with details.',
+        domain: 'docs.example.com',
+        via: 'tweet',
+      }),
+      fetchTwitterReplies: async () => {
+        throw new Error('should not fetch replies');
+      },
+    },
+  );
+
+  assert.deepEqual(resolved.outboundLinks, ['https://docs.example.com/launch']);
+  assert.equal(resolved.url, 'https://docs.example.com/launch');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'tweet_wrapper' });
+});
+
+test('resolveTwitterPrimarySource prefers embedded quoted X source over reply lookup', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource({
+    id: 'tw-quoted-source',
+    source: 'twitter',
+    text: 'Complete guide https://t.co/quoted',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-quoted-source',
+    originUrl: 'https://x.com/alice/status/tw-quoted-source',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: [],
+    embeddedLinkedSource: {
+      url: 'https://x.com/aiedge_/status/quoted-1',
+      title: 'AI Edge',
+      description: 'Quoted X post from @aiedge_',
+      excerpt: 'The full guide lives here',
+      domain: 'x.com',
+      via: 'quote',
+    },
+  }, {
+    resolveShortUrl: async () => 'https://x.com/aiedge_/status/quoted-1',
+    fetchTwitterReplies: async () => {
+      throw new Error('should not fetch replies');
+    },
+  });
+
+  assert.equal(resolved.url, 'https://x.com/aiedge_/status/quoted-1');
+  assert.equal(resolved.sourceLabel, 'AI Edge');
+  assert.deepEqual(resolved.linkedSource, {
+    url: 'https://x.com/aiedge_/status/quoted-1',
+    title: 'AI Edge',
+    description: 'Quoted X post from @aiedge_',
+    excerpt: 'The full guide lives here',
+    domain: 'x.com',
+    via: 'quote',
+  });
+  assert.deepEqual(resolved.replyContext, []);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
+});
+
+test('resolveTwitterPrimarySource skips short-link resolution when structured outbound links already exist', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-structured-link',
+      source: 'twitter',
+      text: 'Read more here https://t.co/short',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-structured-link',
+      originUrl: 'https://x.com/alice/status/tw-structured-link',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: ['https://docs.example.com/launch'],
+    },
+    {
+      resolveShortUrl: async () => {
+        throw new Error('should not resolve short links');
+      },
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Docs Launch',
+        description: 'Official docs for the launch',
+        excerpt: 'Official docs for the launch with details.',
+        domain: 'docs.example.com',
+        via: 'tweet',
+      }),
+    },
+  );
+
+  assert.deepEqual(resolved.outboundLinks, ['https://docs.example.com/launch']);
+  assert.equal(resolved.url, 'https://docs.example.com/launch');
 });
 
 test('resolveTwitterPrimarySources processes reply enrichment sequentially', async () => {
