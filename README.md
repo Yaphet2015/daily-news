@@ -99,7 +99,7 @@ npm run generate
 | `SUBSTACK_SOURCE_MAX_POSTS` | 每次最多纳入多少篇新文章，默认 `40` |
 | `SUBSTACK_SOURCE_MAX_POSTS_PER_PUBLICATION` | 每个 publication 每次最多纳入多少篇文章，默认 `2` |
 
-> 说明：当前版本同时支持 Substack 输入与输出。输入会读取你的公开个人页中展示的 followed publications，再抓取这些 publication 的公开 RSS feed。也就是说，这条路径只覆盖公开文章，不依赖 `substack.sid` / `connect.sid` Cookie。
+> 说明：当前版本同时支持 Substack 输入与输出。输入会读取你的公开个人页中展示的 followed publications，再抓取这些 publication 的公开 RSS feed。也就是说，这条路径只覆盖公开文章，不依赖 `substack.sid` / `connect.sid` Cookie。公开 RSS 抓取按 publication best-effort 处理；如果单个站点因为坏重定向、TLS 或超时失败，会记录 warning 并跳过该 publication，不会中断整次生成。
 
 ---
 
@@ -158,6 +158,7 @@ output/YYYY-MM-DD-substack.html
 - **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
 - **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。若判定 tweet 只是对外链的宣发/摘要，最终条目的 `url` 会改成官方页面，原 tweet permalink 则保留在内部元数据与 selection report 中
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
+- **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪，互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断

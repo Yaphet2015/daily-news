@@ -155,6 +155,10 @@ interface CollectSubstackItemsOptions {
   maxPosts?: number;
   maxPostsPerPublication?: number;
   client?: SubstackClientLike;
+  deps?: {
+    fetchPublicSubstackPublications?: typeof fetchPublicSubstackPublications;
+    fetchPublicationFeed?: typeof fetchPublicationFeed;
+  };
 }
 
 interface PublicSubstackFeed {
@@ -566,10 +570,24 @@ function buildGenericCurlArgs(url: string, proxy: string | undefined): string[] 
   ];
 }
 
+function summarizeErrorText(text: string): string | undefined {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return undefined;
+
+  const preferred = lines.find((line) => !/^Command failed(?::|\s)/.test(line));
+  return preferred ?? lines[0];
+}
+
 function summarizeError(error: unknown): string {
   if (error instanceof Error) {
-    const [firstLine] = error.message.split('\n');
-    return firstLine?.trim() || error.name;
+    const stderrLine = summarizeErrorText((error as Error & { stderr?: string }).stderr ?? '');
+    if (stderrLine) return stderrLine;
+
+    const messageLine = summarizeErrorText(error.message);
+    return messageLine || error.name;
   }
 
   return String(error);
@@ -867,10 +885,16 @@ async function fetchPublicSubstackPublications(): Promise<
   return parsePublicSubstackSubscriptions(html);
 }
 
+function buildPublicationFeedUrl(
+  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>,
+): string {
+  return new URL('/feed', publication.url).toString();
+}
+
 async function fetchPublicationFeed(
   publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>,
 ): Promise<PublicSubstackFeed> {
-  const feedUrl = new URL('/feed', publication.url).toString();
+  const feedUrl = buildPublicationFeedUrl(publication);
   const xml = await fetchSubstackText(feedUrl);
   const parsed = parseSubstackFeed(xml);
 
@@ -884,6 +908,17 @@ async function fetchPublicationFeed(
     },
     posts: parsed.posts,
   };
+}
+
+function warnSubstackFeedFailure(
+  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>,
+  error: unknown,
+): void {
+  const proxy = resolveHttpProxy();
+  const feedUrl = buildPublicationFeedUrl(publication);
+  console.warn(
+    `[collect] 跳过 Substack publication feed: publication="${publication.name}" publicationUrl=${publication.url} feedUrl=${feedUrl} proxy=${proxy ?? 'disabled'} error=${summarizeError(error)}`,
+  );
 }
 
 async function collectViaCli(listId: string, maxTweets: number): Promise<CollectedItem[]> {
@@ -1162,6 +1197,7 @@ export async function collectSubstackItems({
   maxPosts = DEFAULT_SUBSTACK_MAX_POSTS,
   maxPostsPerPublication = DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION,
   client,
+  deps,
 }: CollectSubstackItemsOptions): Promise<CollectedItem[]> {
   console.log(
     `[collect] 采集 Substack subscriptions，sinceTime=${new Date(sinceTime * 1000).toLocaleString('zh-CN')}`,
@@ -1192,10 +1228,18 @@ export async function collectSubstackItems({
       }
     }
   } else {
-    const publications = await fetchPublicSubstackPublications();
+    const fetchPublications = deps?.fetchPublicSubstackPublications ?? fetchPublicSubstackPublications;
+    const fetchFeed = deps?.fetchPublicationFeed ?? fetchPublicationFeed;
+    const publications = await fetchPublications();
 
     for (const publication of publications) {
-      const feed = await fetchPublicationFeed(publication);
+      let feed: PublicSubstackFeed;
+      try {
+        feed = await fetchFeed(publication);
+      } catch (error) {
+        warnSubstackFeedFailure(publication, error);
+        continue;
+      }
       let collectedForPublication = 0;
 
       for (const post of feed.posts) {

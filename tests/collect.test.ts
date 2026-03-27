@@ -741,6 +741,124 @@ test('collectSubstackItems keeps only recent posts and honors global and per-pub
   );
 });
 
+test('collectSubstackItems skips broken public feeds and logs the curl failure summary', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collectSubstackItems, 'function');
+
+  const collectSubstackItems = (collectModule as Record<string, Function>).collectSubstackItems;
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  const originalHttpProxy = process.env.HTTP_PROXY;
+  const originalLowerHttpProxy = process.env.http_proxy;
+
+  console.warn = (message?: unknown, ...args: unknown[]) => {
+    warnings.push([message, ...args].map((value) => String(value)).join(' '));
+  };
+  process.env.HTTP_PROXY = 'http://127.0.0.1:6152';
+  delete process.env.http_proxy;
+
+  try {
+    const items = await collectSubstackItems({
+      sinceTime: Date.parse('2026-03-15T07:30:00Z') / 1000,
+      maxPosts: 5,
+      maxPostsPerPublication: 2,
+      deps: {
+        fetchPublicSubstackPublications: async () => [
+          {
+            name: 'Broken Pub',
+            handle: 'broken',
+            slug: 'broken',
+            url: 'https://broken.example.com',
+          },
+          {
+            name: 'Healthy Pub',
+            handle: 'healthy',
+            slug: 'healthy',
+            url: 'https://healthy.example.com',
+          },
+        ],
+        fetchPublicationFeed: async (publication: { handle: string; name: string; url: string }) => {
+          if (publication.handle === 'broken') {
+            throw new Error(
+              'Command failed: curl -fsSL --proxy http://127.0.0.1:6152 https://broken.example.com/feed\ncurl: (28) SSL connection timeout\n',
+            );
+          }
+
+          return {
+            publication: {
+              name: publication.name,
+              handle: publication.handle,
+              slug: publication.handle,
+              url: publication.url,
+            },
+            posts: [
+              {
+                id: 9,
+                title: 'Healthy post',
+                subtitle: null,
+                body: 'body',
+                truncatedBody: 'body',
+                publishedAt: new Date('2026-03-15T12:00:00Z'),
+                url: 'https://healthy.example.com/p/healthy-post',
+                coverImage: null,
+              },
+            ],
+          };
+        },
+      },
+    });
+
+    assert.deepEqual(
+      items.map((item: { title: string; url: string }) => [item.title, item.url]),
+      [['Healthy post', 'https://healthy.example.com/p/healthy-post']],
+    );
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /Broken Pub/);
+    assert.match(warnings[0]!, /https:\/\/broken\.example\.com/);
+    assert.match(warnings[0]!, /https:\/\/broken\.example\.com\/feed/);
+    assert.match(warnings[0]!, /proxy=http:\/\/127\.0\.0\.1:6152/);
+    assert.match(warnings[0]!, /curl: \(28\) SSL connection timeout/);
+    assert.doesNotMatch(warnings[0]!, /Command failed:/);
+  } finally {
+    console.warn = originalWarn;
+
+    if (originalHttpProxy === undefined) {
+      delete process.env.HTTP_PROXY;
+    } else {
+      process.env.HTTP_PROXY = originalHttpProxy;
+    }
+
+    if (originalLowerHttpProxy === undefined) {
+      delete process.env.http_proxy;
+    } else {
+      process.env.http_proxy = originalLowerHttpProxy;
+    }
+  }
+});
+
+test('collectSubstackItems still fails when SUBSTACK_PUBLICATION_URL is missing', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collectSubstackItems, 'function');
+
+  const collectSubstackItems = (collectModule as Record<string, Function>).collectSubstackItems;
+  const originalPublicationUrl = process.env.SUBSTACK_PUBLICATION_URL;
+
+  delete process.env.SUBSTACK_PUBLICATION_URL;
+
+  try {
+    await assert.rejects(
+      collectSubstackItems({
+        sinceTime: Date.parse('2026-03-15T07:30:00Z') / 1000,
+      }),
+      /缺少 SUBSTACK_PUBLICATION_URL/,
+    );
+  } finally {
+    if (originalPublicationUrl === undefined) {
+      delete process.env.SUBSTACK_PUBLICATION_URL;
+    } else {
+      process.env.SUBSTACK_PUBLICATION_URL = originalPublicationUrl;
+    }
+  }
+});
+
 test('collectSources merges source outputs newest-first and updates per-source cursors', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSources, 'function');
 
