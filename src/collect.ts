@@ -41,6 +41,8 @@ interface TwitterCliTweet {
   replyCount?: number;
   repostCount?: number;
   quoteCount?: number;
+  articleTitle?: string;
+  articleText?: string;
   quotedTweet?: {
     id?: string;
     text?: string;
@@ -191,6 +193,42 @@ function isTwitterShortener(hostname: string): boolean {
   return normalizeDomain(hostname) === 't.co';
 }
 
+function isKnownVideoDomain(hostname: string): boolean {
+  const normalized = normalizeDomain(hostname);
+  return [
+    'youtube.com',
+    'youtu.be',
+    'vimeo.com',
+    'tiktok.com',
+    'bilibili.com',
+    'loom.com',
+  ].some((domain) => normalized === domain || normalized.endsWith(`.${domain}`));
+}
+
+function hasDirectMediaExtension(pathname: string): boolean {
+  return /\.(?:mp4|m4v|mov|avi|wmv|webm|m3u8|mp3|wav|ogg|jpg|jpeg|png|gif|webp|svg)(?:$|[?#])/i.test(
+    pathname,
+  );
+}
+
+export function isLikelyPrimarySourceUrl(raw: string): boolean {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    if (isTwitterShortener(parsed.hostname)) return false;
+    if (isTwitterDomain(parsed.hostname)) {
+      return /^\/i\/article\/[^/?#]+/i.test(parsed.pathname);
+    }
+
+    if (isKnownVideoDomain(parsed.hostname)) return false;
+    if (hasDirectMediaExtension(parsed.pathname)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeExternalUrl(raw: string): string | null {
   try {
     const parsed = new URL(raw);
@@ -215,7 +253,7 @@ export function normalizeExternalUrl(raw: string): string | null {
 function extractUrlsFromText(text: string): string[] {
   return extractRawUrlsFromText(text)
     .map((value) => normalizeExternalUrl(value))
-    .flatMap((value) => (value ? [value] : []));
+    .flatMap((value) => (value && isLikelyPrimarySourceUrl(value) ? [value] : []));
 }
 
 function extractRawUrlsFromText(text: string): string[] {
@@ -232,7 +270,7 @@ function extractStructuredUrls(urls: Array<string | undefined | null>): string[]
   return dedupeUrls(
     urls
       .map((url) => (typeof url === 'string' ? normalizeExternalUrl(url) : null))
-      .flatMap((url) => (url ? [url] : [])),
+      .flatMap((url) => (url && isLikelyPrimarySourceUrl(url) ? [url] : [])),
   );
 }
 
@@ -270,22 +308,28 @@ function normalizeTwitterUrl(raw: string): string | null {
   }
 }
 
+function normalizeTwitterStatusUrl(raw: string): string | null {
+  const normalizedUrl = normalizeTwitterUrl(raw);
+  if (!normalizedUrl) return null;
+  return /^https:\/\/x\.com\/[^/]+\/status\/[^/?#]+/i.test(normalizedUrl) ? normalizedUrl : null;
+}
+
 function buildEmbeddedLinkedSourceFromTwitterUrl(
   raw: string,
   hints: { title?: string; description?: string; excerpt?: string } = {},
+  via: LinkedSource['via'] = 'quote',
 ): LinkedSource | undefined {
   const normalizedUrl = normalizeTwitterUrl(raw);
   if (!normalizedUrl) return undefined;
 
   const parsed = new URL(normalizedUrl);
-  const statusMatch = parsed.pathname.match(/^\/([^/]+)\/status\/([^/?#]+)/i);
   const articleMatch = parsed.pathname.match(/^\/i\/article\/([^/?#]+)/i);
 
-  if (!statusMatch && !articleMatch) return undefined;
+  if (!articleMatch) return undefined;
 
   const title =
     hints.title?.trim() ||
-    (statusMatch?.[1] ? `@${statusMatch[1]}` : articleMatch ? 'X Article' : undefined);
+    (articleMatch ? 'X Article' : undefined);
   const excerpt = hints.excerpt?.trim() || undefined;
   const description = hints.description?.trim() || undefined;
 
@@ -295,23 +339,49 @@ function buildEmbeddedLinkedSourceFromTwitterUrl(
     description,
     excerpt,
     domain: normalizeDomain(parsed.hostname),
-    via: 'quote',
+    via,
   };
 }
 
-function buildEmbeddedLinkedSourceFromQuotedTweet(
-  tweet: Pick<TwitterCliTweet, 'quotedTweet'>,
-): LinkedSource | undefined {
+function buildQuotedStatusUrl(tweet: Pick<TwitterCliTweet, 'quotedTweet'>): string | undefined {
   const quotedTweet = tweet.quotedTweet;
   const quoteId = quotedTweet?.id?.trim();
   const quoteAuthor = quotedTweet?.author?.screenName?.trim();
-  if (!quoteId || !quoteAuthor) return undefined;
+  return quoteId && quoteAuthor ? buildTweetUrl(quoteAuthor, quoteId) : undefined;
+}
 
-  return buildEmbeddedLinkedSourceFromTwitterUrl(buildTweetUrl(quoteAuthor, quoteId), {
-    title: quotedTweet.author?.name?.trim() || `@${quoteAuthor}`,
-    description: `Quoted X post from @${quoteAuthor}`,
-    excerpt: quotedTweet.text?.trim(),
-  });
+function extractTwitterCliEmbeddedLinkedSource(
+  tweet: Pick<TwitterCliTweet, 'urls' | 'text' | 'articleTitle' | 'articleText'>,
+): LinkedSource | undefined {
+  const structuredArticle =
+    (tweet.urls ?? []).find((url): url is string => {
+      return typeof url === 'string' && Boolean(buildEmbeddedLinkedSourceFromTwitterUrl(url));
+    }) ?? extractRawUrlsFromText(tweet.text).find((url) => Boolean(buildEmbeddedLinkedSourceFromTwitterUrl(url)));
+
+  if (!structuredArticle) return undefined;
+
+  return buildEmbeddedLinkedSourceFromTwitterUrl(
+    structuredArticle,
+    {
+      title: tweet.articleTitle,
+      description: tweet.articleTitle ? 'X article' : undefined,
+      excerpt: tweet.articleText,
+    },
+    'tweet',
+  );
+}
+
+function extractTwitterApiEmbeddedLinkedSource(
+  tweet: Pick<TwitterApiTweet, 'entities' | 'text'>,
+): LinkedSource | undefined {
+  const structuredArticle =
+    (tweet.entities?.urls ?? [])
+      .flatMap((entry) => [entry.expanded_url, entry.url])
+      .find((url): url is string => {
+        return typeof url === 'string' && Boolean(buildEmbeddedLinkedSourceFromTwitterUrl(url));
+      }) ?? extractRawUrlsFromText(tweet.text).find((url) => Boolean(buildEmbeddedLinkedSourceFromTwitterUrl(url)));
+
+  return structuredArticle ? buildEmbeddedLinkedSourceFromTwitterUrl(structuredArticle, {}, 'tweet') : undefined;
 }
 
 function toOptionalNumber(value: unknown): number | undefined {
@@ -825,12 +895,13 @@ async function resolveShortUrl(url: string): Promise<string | null> {
 async function enrichTwitterTextCandidates(
   item: CollectedItem,
   resolveShortUrlImpl: (url: string) => Promise<string | null>,
-): Promise<Pick<CollectedItem, 'outboundLinks' | 'embeddedLinkedSource'>> {
+): Promise<Pick<CollectedItem, 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>> {
   const outboundLinks = dedupeUrls(item.outboundLinks ?? []);
   let embeddedLinkedSource = item.embeddedLinkedSource;
+  let quotedStatusUrl = item.quotedStatusUrl;
 
-  if (outboundLinks.length > 0 && embeddedLinkedSource) {
-    return { outboundLinks, embeddedLinkedSource };
+  if (outboundLinks.length > 0 && embeddedLinkedSource && quotedStatusUrl) {
+    return { outboundLinks, embeddedLinkedSource, quotedStatusUrl };
   }
 
   for (const rawUrl of extractRawUrlsFromText(item.text)) {
@@ -854,13 +925,18 @@ async function enrichTwitterTextCandidates(
     }
 
     if (!embeddedLinkedSource) {
-      embeddedLinkedSource = buildEmbeddedLinkedSourceFromTwitterUrl(candidateUrl);
+      embeddedLinkedSource = buildEmbeddedLinkedSourceFromTwitterUrl(candidateUrl, {}, 'tweet');
+    }
+
+    if (!quotedStatusUrl) {
+      quotedStatusUrl = normalizeTwitterStatusUrl(candidateUrl) ?? quotedStatusUrl;
     }
   }
 
   return {
     outboundLinks: dedupeUrls(outboundLinks),
     embeddedLinkedSource,
+    quotedStatusUrl,
   };
 }
 
@@ -903,6 +979,7 @@ async function fetchSubstackText(url: string): Promise<string> {
 async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
   const normalizedUrl = normalizeExternalUrl(url);
   if (!normalizedUrl) return null;
+  if (!isLikelyPrimarySourceUrl(normalizedUrl)) return null;
 
   let stdout: string;
   try {
@@ -950,6 +1027,7 @@ interface ResolveTwitterPrimarySourceOptions {
   fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
   fetchTwitterReplies?: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>;
   resolveShortUrl?: (url: string) => Promise<string | null>;
+  fetchQuotedPrimarySource?: (url: string) => Promise<LinkedSource | null>;
 }
 
 interface FetchTwitterRepliesOptions {
@@ -1026,6 +1104,55 @@ async function fetchTwitterRepliesViaApi(tweetId: string, maxReplies: number): P
       (reply.entities?.urls ?? []).flatMap((entry) => [entry.expanded_url, entry.url]),
     ),
   }));
+}
+
+function extractTweetIdFromStatusUrl(url: string): string | null {
+  const normalizedUrl = normalizeTwitterStatusUrl(url);
+  if (!normalizedUrl) return null;
+  const match = new URL(normalizedUrl).pathname.match(/^\/[^/]+\/status\/([^/?#]+)/i);
+  return match?.[1] ?? null;
+}
+
+async function fetchTwitterTweetViaCli(tweetId: string): Promise<TwitterCliTweet | null> {
+  const proxy = resolveHttpProxy();
+  const { stdout } = await execAsync(buildTwitterReplyCommand(tweetId, 1, proxy), {
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const payload = parseTwitterCliReplyPayload(JSON.parse(stdout) as TwitterCliReplyPayload);
+  return payload[0] ?? null;
+}
+
+async function fetchQuotedPrimarySource(
+  url: string,
+  fetchLinkedPageImpl: (url: string) => Promise<LinkedSource | null>,
+  resolveShortUrlImpl: (url: string) => Promise<string | null>,
+): Promise<LinkedSource | null> {
+  const tweetId = extractTweetIdFromStatusUrl(url);
+  if (!tweetId) return null;
+
+  let quotedTweet: TwitterCliTweet | null;
+  try {
+    quotedTweet = await fetchTwitterTweetViaCli(tweetId);
+  } catch (error) {
+    console.warn(`[collect] 拉取 quoted tweet 失败 ${url}: ${summarizeError(error)}`);
+    return null;
+  }
+
+  if (!quotedTweet) return null;
+
+  const mappedQuotedTweet = mapTwitterCliTweet(quotedTweet);
+  const enrichedQuotedTweet = await enrichTwitterTextCandidates(mappedQuotedTweet, resolveShortUrlImpl);
+  const embeddedLinkedSource = enrichedQuotedTweet.embeddedLinkedSource;
+  if (embeddedLinkedSource) {
+    return { ...embeddedLinkedSource, via: 'quote' };
+  }
+
+  for (const link of enrichedQuotedTweet.outboundLinks ?? []) {
+    const linkedSource = await fetchLinkedPageImpl(link);
+    if (linkedSource) return { ...linkedSource, via: 'quote' };
+  }
+
+  return null;
 }
 
 async function fetchPublicSubstackPublications(): Promise<
@@ -1183,11 +1310,15 @@ export async function resolveTwitterPrimarySource(
   const fetchLinkedPageImpl = options.fetchLinkedPage ?? fetchLinkedPage;
   const fetchTwitterRepliesImpl = options.fetchTwitterReplies ?? fetchTwitterReplies;
   const resolveShortUrlImpl = options.resolveShortUrl ?? resolveShortUrl;
+  const fetchQuotedPrimarySourceImpl =
+    options.fetchQuotedPrimarySource ??
+    ((url: string) => fetchQuotedPrimarySource(url, fetchLinkedPageImpl, resolveShortUrlImpl));
   const enrichedCandidates = await enrichTwitterTextCandidates(item, resolveShortUrlImpl);
   const enrichedItem = {
     ...item,
     outboundLinks: enrichedCandidates.outboundLinks,
     embeddedLinkedSource: enrichedCandidates.embeddedLinkedSource ?? item.embeddedLinkedSource,
+    quotedStatusUrl: enrichedCandidates.quotedStatusUrl ?? item.quotedStatusUrl,
   };
   const tweetLinks = enrichedItem.outboundLinks ?? [];
 
@@ -1205,6 +1336,20 @@ export async function resolveTwitterPrimarySource(
 
   if (tweetLinks.length === 0 && enrichedItem.embeddedLinkedSource) {
     return useEmbeddedLinkedSource([]);
+  }
+
+  if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl) {
+    const quotedPrimarySource = await fetchQuotedPrimarySourceImpl(enrichedItem.quotedStatusUrl);
+    if (quotedPrimarySource) {
+      return {
+        ...enrichedItem,
+        url: quotedPrimarySource.url,
+        sourceLabel: resolveSourceLabel(quotedPrimarySource),
+        linkedSource: quotedPrimarySource,
+        replyContext: [],
+        sourceResolution: { decision: 'use_linked_source', reason: 'quote_wrapper' },
+      };
+    }
   }
 
   const replyContext =
@@ -1244,6 +1389,20 @@ export async function resolveTwitterPrimarySource(
 
   const resolved = resolveTwitterLinkedSource(item, linkedSources);
   if (!resolved.linkedSource) {
+    if (enrichedItem.quotedStatusUrl) {
+      const quotedPrimarySource = await fetchQuotedPrimarySourceImpl(enrichedItem.quotedStatusUrl);
+      if (quotedPrimarySource) {
+        return {
+          ...enrichedItem,
+          url: quotedPrimarySource.url,
+          sourceLabel: resolveSourceLabel(quotedPrimarySource),
+          linkedSource: quotedPrimarySource,
+          replyContext,
+          sourceResolution: { decision: 'use_linked_source', reason: 'quote_wrapper' },
+        };
+      }
+    }
+
     if (enrichedItem.embeddedLinkedSource) {
       return useEmbeddedLinkedSource(replyContext);
     }
@@ -1322,7 +1481,8 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
     url: originUrl,
     originUrl,
     outboundLinks: extractTwitterCliUrls(tweet),
-    embeddedLinkedSource: buildEmbeddedLinkedSourceFromQuotedTweet(tweet),
+    embeddedLinkedSource: extractTwitterCliEmbeddedLinkedSource(tweet),
+    quotedStatusUrl: buildQuotedStatusUrl(tweet),
     media: Array.isArray(tweet.media)
       ? tweet.media.flatMap((item) => {
           const normalized = normalizeMediaItem(item);
@@ -1347,6 +1507,7 @@ export function mapTwitterApiTweet(tweet: TwitterApiTweet): CollectedItem {
     url: originUrl,
     originUrl,
     outboundLinks: extractTwitterApiUrls(tweet),
+    embeddedLinkedSource: extractTwitterApiEmbeddedLinkedSource(tweet),
     media: normalizeTwitterApiMedia(tweet.media, tweet.extendedEntities?.media),
     likeCount: toOptionalNumber(tweet.favorite_count),
     replyCount: toOptionalNumber(tweet.reply_count),

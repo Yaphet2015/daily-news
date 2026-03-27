@@ -67,6 +67,7 @@ export interface CollectedItem {
   media: MediaAsset[];
   outboundLinks?: string[];
   embeddedLinkedSource?: LinkedSource;
+  quotedStatusUrl?: string;
   replyContext?: ReplyContext[];
   linkedSource?: LinkedSource;
   sourceResolution?: SourceResolution;

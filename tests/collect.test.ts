@@ -39,7 +39,7 @@ test('mapTwitterCliTweet preserves structured outbound links for later source re
   assert.deepEqual(tweet.outboundLinks, ['https://docs.example.com/launch']);
 });
 
-test('mapTwitterCliTweet preserves embedded quoted X sources for later source resolution', () => {
+test('mapTwitterCliTweet preserves quoted X status hints for later source resolution', () => {
   const tweet = collectModule.mapTwitterCliTweet({
     id: '1c',
     text: 'Complete guide https://t.co/quoted',
@@ -61,14 +61,19 @@ test('mapTwitterCliTweet preserves embedded quoted X sources for later source re
     },
   } as never);
 
-  assert.deepEqual(tweet.embeddedLinkedSource, {
-    url: 'https://x.com/aiedge_/status/quoted-1',
-    title: 'AI Edge',
-    description: 'Quoted X post from @aiedge_',
-    excerpt: 'The full guide lives here',
-    domain: 'x.com',
-    via: 'quote',
-  });
+  assert.equal(tweet.embeddedLinkedSource, undefined);
+  assert.equal(tweet.quotedStatusUrl, 'https://x.com/aiedge_/status/quoted-1');
+});
+
+test('isLikelyPrimarySourceUrl only accepts external articles/pages and X articles', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).isLikelyPrimarySourceUrl, 'function');
+
+  const isLikelyPrimarySourceUrl = (collectModule as Record<string, Function>).isLikelyPrimarySourceUrl;
+
+  assert.equal(isLikelyPrimarySourceUrl('https://docs.example.com/launch'), true);
+  assert.equal(isLikelyPrimarySourceUrl('https://x.com/i/article/2034035257553690624'), true);
+  assert.equal(isLikelyPrimarySourceUrl('https://x.com/aiedge_/status/2036815449225298369'), false);
+  assert.equal(isLikelyPrimarySourceUrl('https://www.youtube.com/watch?v=123'), false);
 });
 
 test('mapTwitterCliTweet preserves mixed media from twitter-cli', () => {
@@ -576,7 +581,7 @@ test('resolveTwitterPrimarySource resolves text-only t.co links into outboundLin
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'tweet_wrapper' });
 });
 
-test('resolveTwitterPrimarySource prefers embedded quoted X source over reply lookup', async () => {
+test('resolveTwitterPrimarySource prefers quoted X article sources over reply lookup', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
 
   const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
@@ -590,27 +595,31 @@ test('resolveTwitterPrimarySource prefers embedded quoted X source over reply lo
     author: { name: 'Alice', username: 'alice' },
     media: [],
     outboundLinks: [],
-    embeddedLinkedSource: {
-      url: 'https://x.com/aiedge_/status/quoted-1',
-      title: 'AI Edge',
-      description: 'Quoted X post from @aiedge_',
-      excerpt: 'The full guide lives here',
-      domain: 'x.com',
-      via: 'quote',
-    },
+    quotedStatusUrl: 'https://x.com/aiedge_/status/quoted-1',
   }, {
     resolveShortUrl: async () => 'https://x.com/aiedge_/status/quoted-1',
+    fetchQuotedPrimarySource: async (url: string) => {
+      assert.equal(url, 'https://x.com/aiedge_/status/quoted-1');
+      return {
+        url: 'https://x.com/i/article/2034035257553690624',
+        title: 'Claude Skills: Ultimate Guide (March 2026)',
+        description: 'X article',
+        excerpt: 'The full guide lives here',
+        domain: 'x.com',
+        via: 'quote',
+      };
+    },
     fetchTwitterReplies: async () => {
       throw new Error('should not fetch replies');
     },
   });
 
-  assert.equal(resolved.url, 'https://x.com/aiedge_/status/quoted-1');
-  assert.equal(resolved.sourceLabel, 'AI Edge');
+  assert.equal(resolved.url, 'https://x.com/i/article/2034035257553690624');
+  assert.equal(resolved.sourceLabel, 'Claude Skills: Ultimate Guide (March 2026)');
   assert.deepEqual(resolved.linkedSource, {
-    url: 'https://x.com/aiedge_/status/quoted-1',
-    title: 'AI Edge',
-    description: 'Quoted X post from @aiedge_',
+    url: 'https://x.com/i/article/2034035257553690624',
+    title: 'Claude Skills: Ultimate Guide (March 2026)',
+    description: 'X article',
     excerpt: 'The full guide lives here',
     domain: 'x.com',
     via: 'quote',
