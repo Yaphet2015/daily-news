@@ -100,46 +100,12 @@ test('getCandidatePoolSize keeps the final model input bounded', () => {
   assert.equal(getCandidatePoolSize(220), 150);
 });
 
-test('rankItems strongly deprioritizes configured authors for otherwise similar tweets', () => {
-  const ranked = rankItems([
-    makeTwitterItem({
-      id: 'tom',
-      url: 'https://x.com/tom_doerr/status/5',
-      author: { name: 'Tom Doerr', username: 'tom_doerr' },
-      text: 'New agent memory tool with docs, benchmark notes, and repo link https://github.com/example/agent-memory',
-      likeCount: 220,
-      replyCount: 18,
-      repostCount: 25,
-      quoteCount: 9,
-    }),
-    makeTwitterItem({
-      id: 'peer',
-      url: 'https://x.com/alice/status/6',
-      author: { name: 'Alice', username: 'alice' },
-      text: 'New agent memory tool with docs, benchmark notes, and repo link https://github.com/example/agent-memory',
-      likeCount: 90,
-      replyCount: 6,
-      repostCount: 8,
-      quoteCount: 3,
-    }),
-  ]);
-
-  const tom = ranked.find((item) => item.id === 'tom');
-  const peer = ranked.find((item) => item.id === 'peer');
-
-  assert.ok(tom);
-  assert.ok(peer);
-  assert.ok((peer?.priorityScore ?? 0) > (tom?.priorityScore ?? 0));
-  assert.match(tom?.decisionReasons.join(' ') ?? '', /作者规则:降权作者:tom_doerr/);
-  assert.doesNotMatch(tom?.decisionReasons.join(' ') ?? '', /宣发内容/);
-});
-
-test('rankItems keeps deprioritized authors in results instead of hard filtering them out', () => {
+test('rankItems hard filters configured blocked authors before ranking', () => {
   const ranked = rankItems([
     makeTwitterItem({
       id: 'tom',
       url: 'https://x.com/tom_doerr/status/7',
-      author: { name: 'Tom Doerr', username: 'tom_doerr' },
+      author: { name: 'Tom Doerr', username: '@Tom_Doerr' },
       text: 'OpenAI released an agent SDK guide with migration notes and docs https://example.com/agents',
       likeCount: 120,
       replyCount: 14,
@@ -148,10 +114,7 @@ test('rankItems keeps deprioritized authors in results instead of hard filtering
     }),
   ]);
 
-  assert.equal(ranked.length, 1);
-  assert.equal(ranked[0]?.id, 'tom');
-  assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /作者规则:降权作者:tom_doerr/);
-  assert.ok((ranked[0]?.priorityScore ?? 0) < 60);
+  assert.equal(ranked.length, 0);
 });
 
 test('rankItems boosts configured official authors for otherwise similar tweets', () => {

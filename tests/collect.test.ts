@@ -1068,3 +1068,177 @@ test('collectSources merges source outputs newest-first and updates per-source c
     },
   });
 });
+
+// --- X article metadata fallback ---
+
+test('mapTwitterCliTweet creates embeddedLinkedSource from articleTitle/articleText when no /i/article/ URL exists', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: 'article-1',
+    text: 'Analysis of the new feature...',
+    author: {
+      id: 'u1',
+      name: '陈成',
+      screenName: 'chenchengpro',
+    },
+    createdAt: '2026-03-25T00:00:00Z',
+    media: [],
+    articleTitle: 'AI Coding Competition Landscape 2026',
+    articleText: 'A deep analysis of the AI coding landscape that covers multiple dimensions.'.repeat(20),
+  } as never);
+
+  assert.ok(tweet.embeddedLinkedSource);
+  assert.equal(tweet.embeddedLinkedSource!.title, 'AI Coding Competition Landscape 2026');
+  assert.equal(tweet.embeddedLinkedSource!.domain, 'x.com');
+  assert.equal(tweet.embeddedLinkedSource!.via, 'tweet');
+  assert.ok(tweet.embeddedLinkedSource!.excerpt!.length > 0);
+});
+
+test('mapTwitterCliTweet does not create article metadata fallback when articleTitle and articleText are empty', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: 'no-article',
+    text: 'Regular tweet, no article',
+    author: {
+      id: 'u2',
+      name: 'Bob',
+      screenName: 'bob',
+    },
+    createdAt: '2026-03-25T00:00:00Z',
+    media: [],
+  });
+
+  assert.equal(tweet.embeddedLinkedSource, undefined);
+});
+
+// --- Author reply fallback ---
+
+test('resolveTwitterPrimarySource uses author reply source when author replies with a link to a substantial article', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  // Use long text to bypass the existing wrapper-tweet reply resolution path
+  const longText = 'Deep analysis of Claude Code feature flags hidden in the source code. '.repeat(20);
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-author-reply',
+      source: 'twitter',
+      text: longText,
+      publishedAt: '2026-03-23T00:00:00Z',
+      url: 'https://x.com/chenchengpro/status/tw-author-reply',
+      originUrl: 'https://x.com/chenchengpro/status/tw-author-reply',
+      author: { name: '陈成', username: 'chenchengpro' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      fetchTwitterReplies: async () => [
+        {
+          id: 'reply-1',
+          text: 'Full blog post: https://blog.example.com/claude-code-flags',
+          author: { name: '陈成', username: 'chenchengpro' },
+          publishedAt: '2026-03-23T00:01:00Z',
+          url: 'https://x.com/chenchengpro/status/reply-1',
+          outboundLinks: ['https://blog.example.com/claude-code-flags'],
+        },
+      ],
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Claude Code Feature Flags Deep Dive',
+        description: 'A comprehensive analysis of hidden feature flags',
+        excerpt: 'A comprehensive analysis of hidden feature flags in Claude Code source code. '.repeat(15),
+        domain: 'blog.example.com',
+        via: 'reply',
+      }),
+    },
+  );
+
+  assert.equal(resolved.url, 'https://blog.example.com/claude-code-flags');
+  assert.equal(resolved.linkedSource!.title, 'Claude Code Feature Flags Deep Dive');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'author_reply_source' });
+});
+
+test('resolveTwitterPrimarySource does not use author reply when reply link leads to a short page', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const longText = 'Deep analysis of Claude Code feature flags hidden in the source code. '.repeat(20);
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-author-reply-short',
+      source: 'twitter',
+      text: longText,
+      publishedAt: '2026-03-23T00:00:00Z',
+      url: 'https://x.com/chenchengpro/status/tw-author-reply-short',
+      originUrl: 'https://x.com/chenchengpro/status/tw-author-reply-short',
+      author: { name: '陈成', username: 'chenchengpro' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      fetchTwitterReplies: async () => [
+        {
+          id: 'reply-short',
+          text: 'Short link',
+          author: { name: '陈成', username: 'chenchengpro' },
+          publishedAt: '2026-03-23T00:01:00Z',
+          url: 'https://x.com/chenchengpro/status/reply-short',
+          outboundLinks: ['https://example.com/short'],
+        },
+      ],
+      fetchLinkedPage: async () => ({
+        url: 'https://example.com/short',
+        title: 'Short Page',
+        description: 'Not much here',
+        excerpt: 'Short content',
+        domain: 'example.com',
+        via: 'reply',
+      }),
+    },
+  );
+
+  assert.equal(resolved.url, 'https://x.com/chenchengpro/status/tw-author-reply-short');
+  assert.equal(resolved.linkedSource, undefined);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
+});
+
+test('resolveTwitterPrimarySource does not use reply source from a different author', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const longText = 'Deep analysis of Claude Code feature flags hidden in the source code. '.repeat(20);
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-diff-author-reply',
+      source: 'twitter',
+      text: longText,
+      publishedAt: '2026-03-23T00:00:00Z',
+      url: 'https://x.com/chenchengpro/status/tw-diff-author-reply',
+      originUrl: 'https://x.com/chenchengpro/status/tw-diff-author-reply',
+      author: { name: '陈成', username: 'chenchengpro' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      fetchTwitterReplies: async () => [
+        {
+          id: 'reply-other',
+          text: 'Check this out https://blog.example.com/article',
+          author: { name: 'Someone Else', username: 'someoneelse' },
+          publishedAt: '2026-03-23T00:01:00Z',
+          url: 'https://x.com/someoneelse/status/reply-other',
+          outboundLinks: ['https://blog.example.com/article'],
+        },
+      ],
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Article',
+        description: 'Long article',
+        excerpt: 'A'.repeat(600),
+        domain: 'blog.example.com',
+        via: 'reply',
+      }),
+    },
+  );
+
+  assert.equal(resolved.url, 'https://x.com/chenchengpro/status/tw-diff-author-reply');
+  assert.equal(resolved.linkedSource, undefined);
+});

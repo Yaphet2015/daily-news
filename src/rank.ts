@@ -1,5 +1,5 @@
 import type { CollectedItem, RankedItem, ScoreBreakdown } from './types.js';
-import { AUTHOR_RANKING_RULES } from './ranking-preferences.js';
+import { AUTHOR_RANKING_RULES, HARD_FILTERED_AUTHOR_USERNAMES } from './ranking-preferences.js';
 
 const SUBSTANCE_KEYWORDS = [
   'release',
@@ -49,6 +49,11 @@ function hasExternalLink(text: string): boolean {
 function normalizeAuthorKey(username?: string): string | undefined {
   if (!username) return undefined;
   return username.trim().replace(/^@+/, '').toLowerCase();
+}
+
+function isHardFilteredAuthor(item: CollectedItem): boolean {
+  const authorKey = normalizeAuthorKey(item.author.username);
+  return authorKey ? HARD_FILTERED_AUTHOR_USERNAMES.includes(authorKey) : false;
 }
 
 function getAuthorAdjustment(item: CollectedItem): { penalty: number; bonus: number; reason?: string } {
@@ -259,14 +264,15 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
 }
 
 export function rankItems(items: CollectedItem[]): RankedItem[] {
-  if (items.length === 0) return [];
+  const eligibleItems = items.filter((item) => !isHardFilteredAuthor(item));
+  if (eligibleItems.length === 0) return [];
 
-  const newestTimestamp = items.reduce((latest, item) => {
+  const newestTimestamp = eligibleItems.reduce((latest, item) => {
     const published = Date.parse(item.publishedAt);
     return Number.isFinite(published) ? Math.max(latest, published) : latest;
   }, 0);
 
-  const ranked = items.map((item) => {
+  const ranked = eligibleItems.map((item) => {
     const normalizedText = normalizeText(item.text);
     const isPromotional = countKeywordHits(normalizedText, PROMOTIONAL_KEYWORDS) > 0;
     const scoreBreakdown = computeEditorialBreakdown(item, newestTimestamp);

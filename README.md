@@ -162,7 +162,7 @@ output/YYYY-MM-DD-substack.html
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪，互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断
-- **编辑偏好配置**：ranking 支持仓库内维护的作者级降权规则；当前默认对 `@tom_doerr` 做强降权，用于压低高频 GitHub 项目转发账号的排序位置，同时保留极少数高价值内容的入选可能
+- **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认；每个候选项会显示来源、评分提示和最多 3 行摘要预览，便于人工决策
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片

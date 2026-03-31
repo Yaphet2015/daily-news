@@ -371,6 +371,26 @@ function extractTwitterCliEmbeddedLinkedSource(
   );
 }
 
+// Fallback when CLI returns articleTitle/articleText but no /i/article/ URL.
+// This happens when a tweet IS an X article but CLI surfaces it as a regular tweet.
+function buildArticleMetadataLinkedSource(
+  tweet: Pick<TwitterCliTweet, 'id' | 'author' | 'articleTitle' | 'articleText'>,
+): LinkedSource | undefined {
+  const title = tweet.articleTitle?.trim();
+  const excerpt = tweet.articleText?.trim().slice(0, 1500);
+  if (!title && !excerpt) return undefined;
+
+  const tweetUrl = buildTweetUrl(tweet.author.screenName, tweet.id);
+  return {
+    url: tweetUrl,
+    title: title || undefined,
+    description: title ? 'X article' : undefined,
+    excerpt: excerpt || undefined,
+    domain: 'x.com',
+    via: 'tweet',
+  };
+}
+
 function extractTwitterApiEmbeddedLinkedSource(
   tweet: Pick<TwitterApiTweet, 'entities' | 'text'>,
 ): LinkedSource | undefined {
@@ -940,6 +960,45 @@ async function enrichTwitterTextCandidates(
   };
 }
 
+// Minimum excerpt length (chars) to consider a linked page a substantial article.
+const AUTHOR_REPLY_ARTICLE_MIN_LENGTH = 500;
+
+async function findAuthorReplySource(
+  item: CollectedItem,
+  fetchReplies: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>,
+  fetchPage: (url: string) => Promise<LinkedSource | null>,
+): Promise<LinkedSource | null> {
+  const authorUsername = item.author.username?.toLowerCase();
+  if (!authorUsername) return null;
+
+  let replies: ReplyContext[];
+  try {
+    replies = await fetchReplies(item, 3);
+  } catch {
+    return null;
+  }
+
+  // Find first reply by the same author
+  const authorReply = replies.find(
+    (reply) => reply.author.username?.toLowerCase() === authorUsername,
+  );
+  if (!authorReply?.outboundLinks?.length) return null;
+
+  // Check each outbound link for substantial article content
+  for (const link of authorReply.outboundLinks) {
+    try {
+      const linkedSource = await fetchPage(link);
+      if (linkedSource && (linkedSource.excerpt?.length ?? 0) > AUTHOR_REPLY_ARTICLE_MIN_LENGTH) {
+        return { ...linkedSource, via: 'reply' };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 export function resolveTwitterLinkedSource(
   item: CollectedItem,
   linkedSources: LinkedSource[],
@@ -1364,6 +1423,23 @@ export async function resolveTwitterPrimarySource(
       return useEmbeddedLinkedSource(replyContext);
     }
 
+    // Fallback: check if the author posted a reply with a link to the full article
+    const authorReplySource = await findAuthorReplySource(
+      enrichedItem,
+      fetchTwitterRepliesImpl,
+      fetchLinkedPageImpl,
+    );
+    if (authorReplySource) {
+      return {
+        ...enrichedItem,
+        url: authorReplySource.url,
+        sourceLabel: resolveSourceLabel(authorReplySource),
+        linkedSource: authorReplySource,
+        replyContext,
+        sourceResolution: { decision: 'use_linked_source', reason: 'author_reply_source' },
+      };
+    }
+
     return {
       ...enrichedItem,
       replyContext,
@@ -1405,6 +1481,23 @@ export async function resolveTwitterPrimarySource(
 
     if (enrichedItem.embeddedLinkedSource) {
       return useEmbeddedLinkedSource(replyContext);
+    }
+
+    // Fallback: check if the author posted a reply with a link to the full article
+    const authorReplySource = await findAuthorReplySource(
+      enrichedItem,
+      fetchTwitterRepliesImpl,
+      fetchLinkedPageImpl,
+    );
+    if (authorReplySource) {
+      return {
+        ...enrichedItem,
+        url: authorReplySource.url,
+        sourceLabel: resolveSourceLabel(authorReplySource),
+        linkedSource: authorReplySource,
+        replyContext,
+        sourceResolution: { decision: 'use_linked_source', reason: 'author_reply_source' },
+      };
     }
 
     return {
@@ -1481,7 +1574,7 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
     url: originUrl,
     originUrl,
     outboundLinks: extractTwitterCliUrls(tweet),
-    embeddedLinkedSource: extractTwitterCliEmbeddedLinkedSource(tweet),
+    embeddedLinkedSource: extractTwitterCliEmbeddedLinkedSource(tweet) ?? buildArticleMetadataLinkedSource(tweet),
     quotedStatusUrl: buildQuotedStatusUrl(tweet),
     media: Array.isArray(tweet.media)
       ? tweet.media.flatMap((item) => {

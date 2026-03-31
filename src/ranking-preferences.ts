@@ -4,17 +4,15 @@ export interface AuthorRankingRule {
   reason: string;
 }
 
+export const HARD_FILTERED_AUTHOR_USERNAMES = ['tom_doerr'] as const;
+
 export const AUTHOR_RANKING_RULES: Record<string, AuthorRankingRule> = {
-  tom_doerr: {
-    penalty: 24,
-    reason: '降权作者:tom_doerr',
-  },
   openai: {
-    bonus: 6,
+    bonus: 8,
     reason: 'openai官号',
   },
   anthropicai: {
-    bonus: 6,
+    bonus: 8,
     reason: 'anthropicai官号',
   },
 };
