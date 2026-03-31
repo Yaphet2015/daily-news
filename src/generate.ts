@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { collect } from './collect.js';
-import { curate } from './curate.js';
+import { attachReaderBriefs, curate } from './curate.js';
 import { select } from './select.js';
 import { format } from './format.js';
 import { publish } from './publish.js';
@@ -17,7 +17,8 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const rankedItems = rankItems(collectedItems);
+  const enrichedCollectedItems = await attachReaderBriefs(collectedItems);
+  const rankedItems = rankItems(enrichedCollectedItems);
   const candidateItems = selectCandidatePool(rankedItems);
   const curatedItems = await curate(candidateItems);
   if (curatedItems.length === 0) {

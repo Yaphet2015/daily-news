@@ -163,3 +163,47 @@ test('rankItems boosts configured official authors for otherwise similar tweets'
   assert.match(openai?.decisionReasons.join(' ') ?? '', /作者规则:openai官号/);
   assert.match(anthropic?.decisionReasons.join(' ') ?? '', /作者规则:anthropicai官号/);
 });
+
+test('rankItems stops marking long-form Substack posts as low quality when a reader brief is present', () => {
+  const withoutBrief = makeTwitterItem({
+    id: 'llm-bench-without-brief',
+    source: 'substack',
+    url: 'https://cameronrwolfe.substack.com/p/llm-bench',
+    publishedAt: '2026-03-30T09:33:10Z',
+    author: { name: 'Cameron R. Wolfe, Ph.D.' },
+    publication: {
+      name: 'Deep (Learning) Focus',
+      handle: 'cameronrwolfe',
+      url: 'https://cameronrwolfe.substack.com',
+    },
+    title: 'The Anatomy of an LLM Benchmark',
+    subtitle: 'Common patterns used to create the most effective LLM evaluation datasets...',
+    text: 'Common patterns used to create the most effective LLM evaluation datasets...',
+    body:
+      'Throughout the history of AI research, progress has been measured and accelerated by high-quality benchmarks.',
+    media: [{ type: 'photo', url: 'https://img.example/llm-bench.png' }],
+  });
+
+  const withBrief = {
+    ...withoutBrief,
+    id: 'llm-bench-with-brief',
+    readerBrief: {
+      summary: 'An overview of how strong LLM benchmarks are designed and maintained.',
+      keyPoints: ['Benchmark saturation', 'Dataset construction', 'Measurement design'],
+      claims: ['LLM benchmarks need continual reinvention'],
+      whyItMatters: 'Benchmark quality shapes research progress.',
+      signals: ['Practical patterns', 'Survey depth'],
+      caveats: ['Agent benchmarks intentionally out of scope'],
+    },
+  } satisfies CollectedItem;
+
+  const ranked = rankItems([withoutBrief, withBrief]);
+  const baseline = ranked.find((item) => item.id === 'llm-bench-without-brief');
+  const improved = ranked.find((item) => item.id === 'llm-bench-with-brief');
+
+  assert.ok(baseline);
+  assert.ok(improved);
+  assert.match(baseline?.decisionReasons.join(' ') ?? '', /低质量内容/);
+  assert.doesNotMatch(improved?.decisionReasons.join(' ') ?? '', /低质量内容/);
+  assert.ok((improved?.priorityScore ?? 0) > (baseline?.priorityScore ?? 0));
+});

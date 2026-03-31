@@ -9,11 +9,12 @@ npm run generate
     │
     ├─ 1. 采集  → 拉取 Twitter 列表 + 已订阅 Substack publication 新文章
     ├─ 2. 归一化 → 对 Twitter 条目抽取正文 / replies 外链；若 tweet 只是宣发或摘要，则改用外链作为主 source
-    ├─ 3. 预读  → 用额外的快模型读完 Substack 全文并压缩成 briefing
-    ├─ 4. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 40-50 条结构化资讯，按 Product / Tutorial / Opinions/Thoughts 分组
-    ├─ 5. 复选  → 终端交互，人工勾选 6-10 条
-    ├─ 6. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
-    └─ 7. 发布  → 保存到 Obsidian Vault / output/ 目录
+    ├─ 3. 预读  → 用额外的快模型读完 Substack 全文并压缩成 briefing，供后续排序和整理复用
+    ├─ 4. 排序  → 基于外链证据、briefing、新鲜度和重复关系做候选池裁剪
+    ├─ 5. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 40-50 条结构化资讯，按 Product / Tutorial / Opinions/Thoughts 分组
+    ├─ 6. 复选  → 终端交互，人工勾选 6-10 条
+    ├─ 7. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
+    └─ 8. 发布  → 保存到 Obsidian Vault / output/ 目录
 ```
 
 ## 快速开始
@@ -156,11 +157,11 @@ output/YYYY-MM-DD-substack.html
 
 - **按来源增量采集**：`data/state.json` 分别记录 Twitter 与 Substack 的上次运行时间，首次运行默认各自回溯 24 小时
 - **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
-- **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。若判定 tweet 只是对外链的宣发/摘要，最终条目的 `url` 会改成官方页面，原 tweet permalink 则保留在内部元数据与 selection report 中
+- **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
-- **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型
-- **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪，互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
+- **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用
+- **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断
 - **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径

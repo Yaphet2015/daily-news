@@ -812,6 +812,134 @@ test('resolveTwitterPrimarySource falls back to the origin tweet when all linked
   assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
 });
 
+test('resolveTwitterPrimarySource prefers a linked source for long announcement tweets with strong handoff cues', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-vercel-handoff',
+      source: 'twitter',
+      text:
+        'When Opus 4.5 came out, it was a one-way door to a new way of engineering. Agents now do most of our coding.\n\n' +
+        'Knowing the inherent flaws and over-confidence of LLMs, we sent a clear message to our teams. Vibing and mission-critical infrastructure don’t go together.\n\n' +
+        'We’re sharing some of our early internal guidance in how we’re “agenting responsibly”, prioritizing security, durability, and availability at all times.\n' +
+        'https://t.co/b36GiE76Ue',
+      publishedAt: '2026-03-30T23:23:40Z',
+      url: 'https://x.com/rauchg/status/2038759092442050651',
+      originUrl: 'https://x.com/rauchg/status/2038759092442050651',
+      author: { name: 'Guillermo Rauch', username: 'rauchg' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      resolveShortUrl: async () => 'https://vercel.com/blog/agent-responsibly',
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Agent Responsibly',
+        description: 'How Vercel approaches security, durability, and availability with coding agents.',
+        excerpt:
+          'We are sharing internal guidance on security, durability, availability, and responsible agent usage.',
+        domain: 'vercel.com',
+        via: 'tweet',
+      }),
+      fetchTwitterReplies: async () => {
+        throw new Error('should not fetch replies');
+      },
+    },
+  );
+
+  assert.deepEqual(resolved.outboundLinks, ['https://vercel.com/blog/agent-responsibly']);
+  assert.equal(resolved.url, 'https://vercel.com/blog/agent-responsibly');
+  assert.equal(resolved.sourceLabel, 'Agent Responsibly');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'tweet_wrapper' });
+});
+
+test('resolveTwitterPrimarySource prefers the one-hop landing page for long linked summaries with strong overlap', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-agent-report',
+      source: 'twitter',
+      text:
+        '刚刚看到这个 agent of chaos 的工作，更具象感受到，现在 genai 的“连起来能做”的上限已经非常高了，但是真正能在严肃、大规模、大组织里持续运行的系统还是需要非常多工程工作 + human nodes 的。\n\n' +
+        '他们搞了一堆自主 agent（openclaw），给一般 harness 的能力，然后 20 个研究人员开始做一些攻防。\n\n' +
+        '他们的结论是 Agents 目前在 L2 自主水平：能执行子任务，但无法识别“我已超出自己能力边界，应该交还人类控制”，缺乏 L3 所需的自我监控和主动移交能力。\n\n' +
+        '最核心的危险来自 agentic 层带来的新风险：持久内存、工具访问、多方通信和 Agent 间交互。\n\n' +
+        'https://t.co/XxM705uxef',
+      publishedAt: '2026-03-31T01:12:47Z',
+      url: 'https://x.com/wey_gu/status/2038786551480832127',
+      originUrl: 'https://x.com/wey_gu/status/2038786551480832127',
+      author: { name: 'Wey Gu 古思为', username: 'wey_gu' },
+      media: [{ type: 'photo', url: 'https://pbs.twimg.com/media/HEs5jl6asAAKAQv.jpg' }],
+      outboundLinks: [],
+    },
+    {
+      resolveShortUrl: async () => 'https://agentsofchaos.baulab.info/report.html',
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Agent of Chaos Report',
+        description: 'OpenClaw red-team report on agentic risk boundaries and human handoff limits.',
+        excerpt:
+          'The report studies OpenClaw agents, shows L2 autonomy without reliable self-monitoring, and highlights persistent memory, tool use, multi-party communication, and inter-agent coordination risks.',
+        domain: 'agentsofchaos.baulab.info',
+        via: 'tweet',
+      }),
+      fetchTwitterReplies: async () => {
+        throw new Error('should not fetch replies');
+      },
+    },
+  );
+
+  assert.deepEqual(resolved.outboundLinks, ['https://agentsofchaos.baulab.info/report.html']);
+  assert.equal(resolved.url, 'https://agentsofchaos.baulab.info/report.html');
+  assert.equal(resolved.sourceLabel, 'Agent of Chaos Report');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'tweet_wrapper' });
+});
+
+test('resolveTwitterPrimarySource keeps origin for long standalone analysis with low overlap to the linked page', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const item = {
+    id: 'tw-standalone-analysis',
+    source: 'twitter',
+    text:
+      'I spent the week comparing agent deployment patterns across large teams. The strongest signal was not raw model quality but org design, escalation discipline, and ownership boundaries.\n\n' +
+      'My own view is that most companies are underestimating the operational load of review queues, rollback design, and access scoping. The linked reference mentions one subsystem, but my argument here is broader and mostly independent.\n\n' +
+      'I would keep the focus on operating models, not on any single product write-up.\n' +
+      'https://t.co/independent',
+    publishedAt: '2026-03-31T03:00:00Z',
+    url: 'https://x.com/alice/status/tw-standalone-analysis',
+    originUrl: 'https://x.com/alice/status/tw-standalone-analysis',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: [],
+  };
+
+  const resolved = await resolveTwitterPrimarySource(item, {
+    resolveShortUrl: async () => 'https://support.example.com/telescope-warranty',
+    fetchLinkedPage: async (url: string) => ({
+      url,
+      title: 'Telescope Warranty Terms',
+      description: 'Support policy for telescope calibration, replacement parts, and shipping claims.',
+      excerpt: 'Warranty durations, lens cleaning exclusions, and claims processing steps for physical telescopes.',
+      domain: 'support.example.com',
+      via: 'tweet',
+    }),
+    fetchTwitterReplies: async () => {
+      throw new Error('should not fetch replies');
+    },
+  });
+
+  assert.deepEqual(resolved.outboundLinks, ['https://support.example.com/telescope-warranty']);
+  assert.equal(resolved.url, item.originUrl);
+  assert.equal(resolved.linkedSource, undefined);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'tweet_has_unique_context' });
+});
+
 test('collectSubstackItems keeps only recent posts and honors global and per-publication caps', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSubstackItems, 'function');
 

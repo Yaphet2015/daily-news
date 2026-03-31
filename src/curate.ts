@@ -236,7 +236,9 @@ export async function attachReaderBriefs(
     const item = items[i];
     results[i] =
       item.source === 'substack'
-        ? { ...item, readerBrief: await reader(item) }
+        ? item.readerBrief
+          ? item
+          : { ...item, readerBrief: await reader(item) }
         : item;
     await runNext();
   }

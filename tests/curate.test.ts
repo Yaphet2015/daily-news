@@ -127,6 +127,55 @@ test('attachReaderBriefs only invokes the reader for Substack items', async () =
   });
 });
 
+test('attachReaderBriefs reuses an existing reader brief instead of reading the Substack article twice', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).attachReaderBriefs, 'function');
+
+  const attachReaderBriefs = (curateModule as Record<string, Function>).attachReaderBriefs;
+  let calls = 0;
+
+  const existingBrief = {
+    summary: 'Existing summary',
+    keyPoints: ['Point A'],
+    claims: ['Claim A'],
+    whyItMatters: 'Because it matters.',
+    signals: ['Signal A'],
+    caveats: ['Caveat A'],
+  };
+
+  const items = await attachReaderBriefs(
+    [
+      {
+        id: 'ss-existing',
+        source: 'substack',
+        title: 'Article',
+        subtitle: 'Subtitle',
+        text: 'excerpt',
+        body: 'Full article body',
+        author: { name: 'Pub' },
+        publication: { name: 'Pub', handle: 'pub', url: 'https://pub.substack.com' },
+        publishedAt: '2026-03-15T01:00:00Z',
+        url: 'https://pub.substack.com/p/article',
+        media: [],
+        readerBrief: existingBrief,
+      },
+    ],
+    async () => {
+      calls += 1;
+      return {
+        summary: 'new summary',
+        keyPoints: ['point'],
+        claims: ['claim'],
+        whyItMatters: 'why',
+        signals: ['signal'],
+        caveats: ['caveat'],
+      };
+    },
+  );
+
+  assert.equal(calls, 0);
+  assert.deepEqual(items[0].readerBrief, existingBrief);
+});
+
 test('parseReaderBrief rejects malformed JSON payloads', () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
 

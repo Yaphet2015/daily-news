@@ -819,10 +819,53 @@ function hasBulletLikeStructure(text: string): boolean {
   return /(^|\n)\s*(?:[-*•]|\d+\.)\s+/m.test(text);
 }
 
+const OVERLAP_STOPWORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'that',
+  'this',
+  'from',
+  'into',
+  'onto',
+  'over',
+  'under',
+  'our',
+  'your',
+  'their',
+  'they',
+  'them',
+  'have',
+  'has',
+  'had',
+  'was',
+  'were',
+  'are',
+  'but',
+  'not',
+  'one',
+  'two',
+  'three',
+  'some',
+  'more',
+  'most',
+  'here',
+  'there',
+  'about',
+  'into',
+  'than',
+  'then',
+  'what',
+  'when',
+  'where',
+  'while',
+]);
+
 function tokenizeForOverlap(text: string): string[] {
   return normalizeText(text)
     .split(/[^a-z0-9\u4e00-\u9fff]+/i)
-    .filter((token) => token.length >= 3);
+    .filter((token) => token.length >= 3 && !OVERLAP_STOPWORDS.has(token));
 }
 
 function hasMeaningfulOverlap(left: string, right: string): boolean {
@@ -870,16 +913,52 @@ function looksLikeWrapperText(text: string): boolean {
   return shortEnough && (hasPromoPhrase || countSentences(text) <= 2);
 }
 
+function hasLinkedSourceHandoffCue(text: string): boolean {
+  const normalized = normalizeText(text);
+  const handoffPhrases = [
+    'sharing',
+    'we’re sharing',
+    "we're sharing",
+    'shared',
+    'report',
+    'paper',
+    'guide',
+    'docs',
+    'documentation',
+    'announcement',
+    'announcing',
+    'launch post',
+    'blog post',
+    'read more',
+    'full post',
+    'see here',
+    'more here',
+    '发布',
+    '报告',
+    '论文',
+    '文档',
+    '博客',
+    '全文',
+    '详见',
+    '更多信息',
+  ];
+
+  return handoffPhrases.some((phrase) => normalized.includes(phrase));
+}
+
 function shouldKeepOriginTweet(item: CollectedItem, linkedSource: LinkedSource): boolean {
   const text = item.text.trim();
-  if (text.length >= 400) return true;
-  if (hasBulletLikeStructure(text)) return true;
-  if (countSentences(text) >= 4 && !looksLikeWrapperText(text)) return true;
-
   const pageContext = [linkedSource.title, linkedSource.description, linkedSource.excerpt]
     .filter(Boolean)
     .join(' ');
-  return !looksLikeWrapperText(text) && !hasMeaningfulOverlap(text, pageContext);
+  const hasOverlap = hasMeaningfulOverlap(text, pageContext);
+  const hasHandoffCue = hasLinkedSourceHandoffCue(text);
+
+  if (hasOverlap || hasHandoffCue) return false;
+  if (hasBulletLikeStructure(text)) return true;
+  if (countSentences(text) >= 4 && !looksLikeWrapperText(text)) return true;
+
+  return !looksLikeWrapperText(text) && !hasOverlap;
 }
 
 function buildResolveUrlCurlArgs(url: string, proxy: string | undefined): string[] {
