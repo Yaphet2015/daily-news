@@ -3,36 +3,39 @@ import assert from 'node:assert/strict';
 import { format } from '../src/format.js';
 
 test('format renders photo media and uses source-aware attribution', () => {
-  const result = format([
-    {
-      id: 'tw-1',
-      title: 'Launch',
-      summary: 'Summary',
-      url: 'https://docs.example.com/launch',
-      originUrl: 'https://x.com/alice/status/1',
-      author: 'alice',
-      attribution: 'OpenAI Docs',
-      source: 'twitter',
-      category: 'Product',
-      media: [
-        { type: 'photo', url: 'https://img/1.jpg', width: 1200, height: 675 },
-        { type: 'animated_gif', url: 'https://img/2.gif' },
-        { type: 'video', url: 'https://video/1.mp4' },
-        { type: 'photo', url: 'https://img/3.jpg' },
-      ],
-    },
-    {
-      id: 'ss-1',
-      title: 'Article',
-      summary: 'Article summary',
-      url: 'https://example.substack.com/p/article',
-      author: 'Ben Thompson',
-      attribution: 'Stratechery / Ben Thompson',
-      source: 'substack',
-      category: 'Opinions/Thoughts',
-      media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
-    },
-  ] as never[]);
+  const result = format(
+    [
+      {
+        id: 'tw-1',
+        title: 'Launch',
+        summary: 'Summary',
+        url: 'https://docs.example.com/launch',
+        originUrl: 'https://x.com/alice/status/1',
+        author: 'alice',
+        attribution: 'OpenAI Docs',
+        source: 'twitter',
+        category: 'Product',
+        media: [
+          { type: 'photo', url: 'https://img/1.jpg', width: 1200, height: 675 },
+          { type: 'animated_gif', url: 'https://img/2.gif' },
+          { type: 'video', url: 'https://video/1.mp4' },
+          { type: 'photo', url: 'https://img/3.jpg' },
+        ],
+      },
+      {
+        id: 'ss-1',
+        title: 'Article',
+        summary: 'Article summary',
+        url: 'https://example.substack.com/p/article',
+        author: 'Ben Thompson',
+        attribution: 'Stratechery / Ben Thompson',
+        source: 'substack',
+        category: 'Opinions/Thoughts',
+        media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
+      },
+    ] as never[],
+    '2026-03-15',
+  );
 
   assert.match(result.obsidian, /## Product/);
   assert.match(result.obsidian, /## Opinions\/Thoughts/);
@@ -56,4 +59,28 @@ test('format renders photo media and uses source-aware attribution', () => {
   assert.doesNotMatch(result.substack, /x\.com\/alice\/status\/1/);
   assert.doesNotMatch(result.substack, /video\/1\.mp4/);
   assert.doesNotMatch(result.substack, /img\/2\.gif/);
+});
+
+test('format uses the explicit collection date for titles and frontmatter', () => {
+  const result = format(
+    [
+      {
+        id: 'tw-1',
+        title: 'Launch',
+        summary: 'Summary',
+        url: 'https://docs.example.com/launch',
+        author: 'alice',
+        attribution: 'OpenAI Docs',
+        source: 'twitter',
+        category: 'Product',
+        media: [],
+      },
+    ] as never[],
+    '2026-03-10',
+  );
+
+  assert.match(result.obsidian, /date: 2026-03-10/);
+  assert.match(result.obsidian, /# AI 日刊 · 2026-03-10/);
+  assert.match(result.substack, /<h1>AI 日刊 · 2026-03-10<\/h1>/);
+  assert.equal(result.date, '2026-03-10');
 });

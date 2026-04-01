@@ -1146,7 +1146,7 @@ test('collectSubstackItems still fails when SUBSTACK_PUBLICATION_URL is missing'
   }
 });
 
-test('collectSources merges source outputs newest-first and updates per-source cursors', async () => {
+test('collectSources merges source outputs newest-first and returns a collection snapshot', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSources, 'function');
 
   const collectSources = (collectModule as Record<string, Function>).collectSources;
@@ -1155,8 +1155,8 @@ test('collectSources merges source outputs newest-first and updates per-source c
     nowSeconds: 1710000000,
     state: {
       sources: {
-        twitter: { lastRunTime: 100 },
-        substack: { lastRunTime: 200 },
+        twitter: { lastPublishedTime: 100 },
+        substack: { lastPublishedTime: 200 },
       },
     },
     collectors: {
@@ -1189,12 +1189,8 @@ test('collectSources merges source outputs newest-first and updates per-source c
   });
 
   assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['ss-1', 'tw-1']);
-  assert.deepEqual(result.state, {
-    sources: {
-      twitter: { lastRunTime: 1710000000 },
-      substack: { lastRunTime: 1710000000 },
-    },
-  });
+  assert.equal(result.collectedAt, 1710000000);
+  assert.deepEqual(result.enabledSources, ['twitter', 'substack']);
 });
 
 // --- X article metadata fallback ---

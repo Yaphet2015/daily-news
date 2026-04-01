@@ -11,8 +11,8 @@ test('normalizeRunState migrates legacy state to per-source cursors', () => {
   const normalizeRunState = (stateModule as Record<string, Function>).normalizeRunState;
   assert.deepEqual(normalizeRunState({ lastRunTime: 123 }), {
     sources: {
-      twitter: { lastRunTime: 123 },
-      substack: { lastRunTime: 0 },
+      twitter: { lastPublishedTime: 123 },
+      substack: { lastPublishedTime: 0 },
     },
   });
 });
@@ -25,8 +25,8 @@ test('readState returns the new empty shape when state file is missing', async (
 
   assert.deepEqual(state, {
     sources: {
-      twitter: { lastRunTime: 0 },
-      substack: { lastRunTime: 0 },
+      twitter: { lastPublishedTime: 0 },
+      substack: { lastPublishedTime: 0 },
     },
   });
 });
@@ -38,8 +38,8 @@ test('writeState persists per-source cursors', async () => {
   await stateModule.writeState(
     {
       sources: {
-        twitter: { lastRunTime: 11 },
-        substack: { lastRunTime: 22 },
+        twitter: { lastPublishedTime: 11 },
+        substack: { lastPublishedTime: 22 },
       },
     } as never,
     statePath as never,
@@ -48,6 +48,7 @@ test('writeState persists per-source cursors', async () => {
   const raw = await readFile(statePath, 'utf-8');
   assert.match(raw, /"twitter"/);
   assert.match(raw, /"substack"/);
+  assert.match(raw, /"lastPublishedTime"/);
   assert.match(raw, /11/);
   assert.match(raw, /22/);
 });

@@ -10,8 +10,8 @@ const STATE_PATH = join(__dirname, '..', 'data', 'state.json');
 function createEmptyState(): RunState {
   return {
     sources: {
-      twitter: { lastRunTime: 0 },
-      substack: { lastRunTime: 0 },
+      twitter: { lastPublishedTime: 0 },
+      substack: { lastPublishedTime: 0 },
     },
   };
 }
@@ -28,8 +28,8 @@ export function normalizeRunState(raw: unknown): RunState {
   if (typeof candidate.lastRunTime === 'number' && Number.isFinite(candidate.lastRunTime)) {
     return {
       sources: {
-        twitter: { lastRunTime: candidate.lastRunTime },
-        substack: { lastRunTime: 0 },
+        twitter: { lastPublishedTime: candidate.lastRunTime },
+        substack: { lastPublishedTime: 0 },
       },
     };
   }
@@ -39,11 +39,18 @@ export function normalizeRunState(raw: unknown): RunState {
       ? (candidate.sources as Record<string, unknown>)
       : {};
 
-  const getLastRunTime = (source: 'twitter' | 'substack'): number => {
+  const getLastPublishedTime = (source: 'twitter' | 'substack'): number => {
     const sourceState =
       sources[source] && typeof sources[source] === 'object'
         ? (sources[source] as Record<string, unknown>)
         : {};
+    if (
+      typeof sourceState.lastPublishedTime === 'number' &&
+      Number.isFinite(sourceState.lastPublishedTime)
+    ) {
+      return sourceState.lastPublishedTime;
+    }
+
     return typeof sourceState.lastRunTime === 'number' && Number.isFinite(sourceState.lastRunTime)
       ? sourceState.lastRunTime
       : 0;
@@ -51,8 +58,8 @@ export function normalizeRunState(raw: unknown): RunState {
 
   return {
     sources: {
-      twitter: { lastRunTime: getLastRunTime('twitter') },
-      substack: { lastRunTime: getLastRunTime('substack') },
+      twitter: { lastPublishedTime: getLastPublishedTime('twitter') },
+      substack: { lastPublishedTime: getLastPublishedTime('substack') },
     },
   };
 }

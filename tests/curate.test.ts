@@ -186,6 +186,72 @@ test('parseReaderBrief rejects malformed JSON payloads', () => {
   );
 });
 
+test('parseReaderBrief normalizes null list fields to empty arrays', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
+
+  const parseReaderBrief = (curateModule as Record<string, Function>).parseReaderBrief;
+  const brief = parseReaderBrief(
+    JSON.stringify({
+      summary: 'Summary',
+      keyPoints: null,
+      claims: ['Claim'],
+      whyItMatters: 'Why',
+      signals: null,
+      caveats: null,
+    }),
+  );
+
+  assert.deepEqual(brief, {
+    summary: 'Summary',
+    keyPoints: [],
+    claims: ['Claim'],
+    whyItMatters: 'Why',
+    signals: [],
+    caveats: [],
+  });
+});
+
+test('parseReaderBrief normalizes missing list fields to empty arrays', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
+
+  const parseReaderBrief = (curateModule as Record<string, Function>).parseReaderBrief;
+  const brief = parseReaderBrief(
+    JSON.stringify({
+      summary: 'Summary',
+      whyItMatters: 'Why',
+    }),
+  );
+
+  assert.deepEqual(brief, {
+    summary: 'Summary',
+    keyPoints: [],
+    claims: [],
+    whyItMatters: 'Why',
+    signals: [],
+    caveats: [],
+  });
+});
+
+test('parseReaderBrief still rejects invalid list payload types', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
+
+  const parseReaderBrief = (curateModule as Record<string, Function>).parseReaderBrief;
+  assert.throws(
+    () =>
+      parseReaderBrief(
+        JSON.stringify({
+          summary: 'Summary',
+          keyPoints: 'not-an-array',
+          claims: [],
+          whyItMatters: 'Why',
+          signals: [],
+          caveats: [],
+        }),
+      ),
+    /reader brief/i,
+  );
+});
+
 test('buildCollectedItemsPayload uses reader brief for Substack items instead of raw body', () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).buildCollectedItemsPayload, 'function');
 

@@ -62,6 +62,11 @@ function validateStringArray(value: unknown): string[] | null {
     : null;
 }
 
+function normalizeOptionalStringArray(value: unknown): string[] | null {
+  if (value == null) return [];
+  return validateStringArray(value);
+}
+
 function formatMediaForPrompt(media: MediaAsset[]): string {
   if (media.length === 0) return 'Media: none';
 
@@ -149,6 +154,7 @@ async function readSubstackArticle(item: CollectedItem): Promise<ReaderBrief> {
   const userContent = [
     'Read the full Substack article below and return strict JSON with these fields:',
     'summary, keyPoints, claims, whyItMatters, signals, caveats',
+    'All list fields must always be JSON arrays of strings. If a section is empty, return []. Never return null.',
     '',
     `Publication: ${item.publication?.name ?? 'Unknown'}`,
     `Author: ${item.author.name}`,
@@ -190,10 +196,10 @@ export function parseReaderBrief(raw: string): ReaderBrief {
   const parsed = parseJson<Record<string, unknown>>(raw);
   const summary = normalizeString(parsed.summary);
   const whyItMatters = normalizeString(parsed.whyItMatters);
-  const keyPoints = validateStringArray(parsed.keyPoints);
-  const claims = validateStringArray(parsed.claims);
-  const signals = validateStringArray(parsed.signals);
-  const caveats = validateStringArray(parsed.caveats);
+  const keyPoints = normalizeOptionalStringArray(parsed.keyPoints);
+  const claims = normalizeOptionalStringArray(parsed.claims);
+  const signals = normalizeOptionalStringArray(parsed.signals);
+  const caveats = normalizeOptionalStringArray(parsed.caveats);
 
   if (
     !summary ||

@@ -1,7 +1,7 @@
 import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readState, writeState } from './state.js';
 import type {
+  CollectionSnapshot,
   CollectedItem,
   LinkedSource,
   MediaAsset,
@@ -431,8 +431,8 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 }
 
 function getSourceSinceTime(state: RunState, source: SourceName, nowSeconds: number): number {
-  const lastRunTime = state.sources[source].lastRunTime;
-  return lastRunTime > 0 ? lastRunTime : nowSeconds - DEFAULT_LOOKBACK_SECONDS;
+  const lastPublishedTime = state.sources[source].lastPublishedTime;
+  return lastPublishedTime > 0 ? lastPublishedTime : nowSeconds - DEFAULT_LOOKBACK_SECONDS;
 }
 
 function normalizeMediaItem(item: unknown, fallbackType?: string): MediaAsset | null {
@@ -1803,26 +1803,20 @@ export async function collectSources({
   nowSeconds,
   state,
   collectors,
-}: CollectSourcesOptions): Promise<{ items: CollectedItem[]; state: RunState }> {
+}: CollectSourcesOptions): Promise<CollectionSnapshot> {
   const mergedItems: CollectedItem[] = [];
-  const nextState: RunState = {
-    sources: {
-      twitter: { lastRunTime: state.sources.twitter.lastRunTime },
-      substack: { lastRunTime: state.sources.substack.lastRunTime },
-    },
-  };
 
   for (const source of enabledSources) {
     const collectSource = collectors[source];
     const sinceTime = getSourceSinceTime(state, source, nowSeconds);
     const items = await collectSource(sinceTime);
     mergedItems.push(...items);
-    nextState.sources[source] = { lastRunTime: nowSeconds };
   }
 
   return {
+    collectedAt: nowSeconds,
+    enabledSources,
     items: sortNewestFirst(mergedItems),
-    state: nextState,
   };
 }
 
@@ -1836,12 +1830,13 @@ function parseEnabledSources(): SourceName[] {
   return sources.length > 0 ? Array.from(new Set(sources)) : ['twitter'];
 }
 
-export async function collect(): Promise<CollectedItem[]> {
-  const state = await readState();
-  const nowSeconds = Math.floor(Date.now() / 1000);
+export async function collect(
+  state: RunState,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): Promise<CollectionSnapshot> {
   const enabledSources = parseEnabledSources();
 
-  const { items, state: nextState } = await collectSources({
+  const snapshot = await collectSources({
     enabledSources,
     nowSeconds,
     state,
@@ -1859,7 +1854,6 @@ export async function collect(): Promise<CollectedItem[]> {
     },
   });
 
-  await writeState(nextState);
-  console.log(`[collect] 完成，共采集 ${items.length} 条跨来源内容`);
-  return items;
+  console.log(`[collect] 完成，共采集 ${snapshot.items.length} 条跨来源内容`);
+  return snapshot;
 }

@@ -2,12 +2,8 @@ import type { CuratedItem, FormatResult, NewsCategory } from './types.js';
 
 const CATEGORY_ORDER: NewsCategory[] = ['Product', 'Tutorial', 'Opinions/Thoughts'];
 
-function getDateString(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+export function formatDateFromUnixSeconds(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
 function getPhotoUrls(item: CuratedItem): string[] {
@@ -85,8 +81,7 @@ function formatSubstack(items: CuratedItem[], date: string): string {
   return `${header}\n${body}\n`;
 }
 
-export function format(items: CuratedItem[]): FormatResult {
-  const date = getDateString();
+export function format(items: CuratedItem[], date: string): FormatResult {
   return {
     date,
     obsidian: formatObsidian(items, date),

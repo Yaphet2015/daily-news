@@ -130,7 +130,7 @@ export interface SelectionReport {
 }
 
 export interface SourceRunState {
-  lastRunTime: number;
+  lastPublishedTime: number;
 }
 
 export interface RunState {
@@ -139,3 +139,11 @@ export interface RunState {
     substack: SourceRunState;
   };
 }
+
+export interface CollectionSnapshot {
+  collectedAt: number;
+  enabledSources: SourceName[];
+  items: CollectedItem[];
+}
+
+export interface PendingDraft extends CollectionSnapshot {}
