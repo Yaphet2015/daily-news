@@ -868,15 +868,14 @@ function tokenizeForOverlap(text: string): string[] {
     .filter((token) => token.length >= 3 && !OVERLAP_STOPWORDS.has(token));
 }
 
-function hasMeaningfulOverlap(left: string, right: string): boolean {
-  const leftTokens = new Set(tokenizeForOverlap(left));
-  if (leftTokens.size === 0) return false;
-  let overlap = 0;
-  for (const token of tokenizeForOverlap(right)) {
-    if (leftTokens.has(token)) overlap += 1;
-    if (overlap >= 2) return true;
-  }
-  return false;
+/** Fraction of tweet tokens that also appear in the linked page context. */
+function overlapRatio(tweetText: string, pageContext: string): number {
+  const tweetTokens = tokenizeForOverlap(tweetText);
+  if (tweetTokens.length === 0) return 0;
+  const pageTokenSet = new Set(tokenizeForOverlap(pageContext));
+  if (pageTokenSet.size === 0) return 0;
+  const shared = tweetTokens.filter((t) => pageTokenSet.has(t)).length;
+  return shared / tweetTokens.length;
 }
 
 function looksLikeWrapperText(text: string): boolean {
@@ -951,14 +950,24 @@ function shouldKeepOriginTweet(item: CollectedItem, linkedSource: LinkedSource):
   const pageContext = [linkedSource.title, linkedSource.description, linkedSource.excerpt]
     .filter(Boolean)
     .join(' ');
-  const hasOverlap = hasMeaningfulOverlap(text, pageContext);
-  const hasHandoffCue = hasLinkedSourceHandoffCue(text);
 
-  if (hasOverlap || hasHandoffCue) return false;
+  // Explicit handoff cues ("we're sharing", "read more", "详见") are
+  // strong signals that the tweet is a pointer, not original content.
+  if (hasLinkedSourceHandoffCue(text)) return false;
+
+  const ratio = overlapRatio(text, pageContext);
+
+  // High overlap: tweet is mostly restating page content regardless of length.
+  // For long tweets (≥4 sentences), even moderate overlap (≥0.15) suggests
+  // retelling — a long tweet sharing domain vocabulary with the linked page
+  // is likely summarizing it. Short tweets use a higher bar (≥0.4).
+  const isLong = countSentences(text) >= 4;
+  if ((!isLong && ratio >= 0.4) || (isLong && ratio >= 0.15)) return false;
+
+  // Structural evidence: bullet points indicate original content.
   if (hasBulletLikeStructure(text)) return true;
-  if (countSentences(text) >= 4 && !looksLikeWrapperText(text)) return true;
 
-  return !looksLikeWrapperText(text) && !hasOverlap;
+  return !looksLikeWrapperText(text);
 }
 
 function buildResolveUrlCurlArgs(url: string, proxy: string | undefined): string[] {
