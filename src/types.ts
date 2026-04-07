@@ -82,6 +82,7 @@ export interface ScoreBreakdown {
   substance: number;
   evidence: number;
   sourceSignal: number;
+  xArticleBonus: number;
   freshness: number;
   novelty: number;
   actionability: number;

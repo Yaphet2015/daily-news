@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getCandidatePoolSize, rankItems } from '../src/rank.js';
+import { mapTwitterCliTweet } from '../src/collect.js';
 import type { CollectedItem } from '../src/types.js';
 
 function makeTwitterItem(overrides: Partial<CollectedItem> = {}): CollectedItem {
@@ -162,6 +163,136 @@ test('rankItems boosts configured official authors for otherwise similar tweets'
   assert.ok((anthropic?.priorityScore ?? 0) > (peer?.priorityScore ?? 0));
   assert.match(openai?.decisionReasons.join(' ') ?? '', /作者规则:openai官号/);
   assert.match(anthropic?.decisionReasons.join(' ') ?? '', /作者规则:anthropicai官号/);
+});
+
+test('rankItems does not mark a personal tweet with a linked source as official', () => {
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'personal-linked-source',
+      text: 'Deep dive into the new API design and migration path.',
+      author: { name: 'Alice', username: 'alice' },
+      linkedSource: {
+        url: 'https://blog.example.com/api-design',
+        title: 'API Design Notes',
+        description: 'Personal analysis',
+        excerpt: 'Long analysis of the API trade-offs and rollout details.',
+        domain: 'blog.example.com',
+        via: 'tweet',
+      },
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+    }),
+  ]);
+
+  assert.equal(ranked.length, 1);
+  assert.doesNotMatch(ranked[0]?.decisionReasons.join(' ') ?? '', /官方/);
+});
+
+test('rankItems marks allowlisted official source domains as official', () => {
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'official-domain',
+      text: 'Official documentation update with migration notes and examples.',
+      author: { name: 'Alice', username: 'alice' },
+      linkedSource: {
+        url: 'https://docs.openai.com/guides/responses',
+        title: 'Responses API Guide',
+        description: 'Official docs',
+        excerpt: 'Guide covering migration notes and usage examples.',
+        domain: 'docs.openai.com',
+        via: 'tweet',
+      },
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+    }),
+  ]);
+
+  assert.equal(ranked.length, 1);
+  assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /官方/);
+});
+
+test('rankItems adds exactly 10 editorial points for X articles', () => {
+  const articleText = 'Long-form analysis of agentic coding workflows with concrete evaluation criteria alpha.';
+  const nonArticleText = 'Long-form analysis of agentic coding workflows with concrete evaluation criteria bravo.';
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'x-article',
+      url: 'https://x.com/alice/status/x-article',
+      text: articleText,
+      linkedSource: {
+        url: 'https://x.com/i/article/2034035257553690624',
+        title: 'Agentic Coding Workflows',
+        description: 'X article',
+        excerpt: 'A long-form analysis of agentic coding workflows and evaluation criteria.',
+        domain: 'x.com',
+        via: 'tweet',
+      },
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+    }),
+    makeTwitterItem({
+      id: 'external-article',
+      url: 'https://x.com/alice/status/external-article',
+      text: nonArticleText,
+      linkedSource: {
+        url: 'https://blog.example.com/agentic-coding',
+        title: 'Agentic Coding Workflows',
+        description: 'Article',
+        excerpt: 'A long-form analysis of agentic coding workflows and evaluation criteria.',
+        domain: 'blog.example.com',
+        via: 'tweet',
+      },
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+    }),
+  ]);
+
+  const articleItem = ranked.find((item) => item.id === 'x-article');
+  const nonArticleItem = ranked.find((item) => item.id === 'external-article');
+
+  assert.equal(articleItem?.editorialScore, (nonArticleItem?.editorialScore ?? 0) + 10);
+  assert.match(articleItem?.decisionReasons.join(' ') ?? '', /X article/);
+  assert.doesNotMatch(nonArticleItem?.decisionReasons.join(' ') ?? '', /X article/);
+});
+
+test('rankItems does not add X article bonus to normal X status links', () => {
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'x-status-link',
+      text: 'A tweet with a normal X status link should not count as a long-form article.',
+      linkedSource: {
+        url: 'https://x.com/alice/status/1234567890',
+        title: 'Normal status',
+        description: 'Tweet',
+        excerpt: 'This is still just a normal X status link.',
+        domain: 'x.com',
+        via: 'tweet',
+      },
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+    }),
+  ]);
+
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0]?.scoreBreakdown.xArticleBonus, 0);
+  assert.doesNotMatch(ranked[0]?.decisionReasons.join(' ') ?? '', /X article/);
+});
+
+test('rankItems adds X article bonus for articleTitle/articleText fallback tweets', () => {
+  const mapped = mapTwitterCliTweet({
+    id: 'fallback-article',
+    text: 'Analysis of the new feature...',
+    author: {
+      id: 'u1',
+      name: '陈成',
+      screenName: 'chenchengpro',
+    },
+    createdAt: '2026-03-25T00:00:00Z',
+    media: [],
+    articleTitle: 'AI Coding Competition Landscape 2026',
+    articleText: 'A deep analysis of the AI coding landscape that covers multiple dimensions.'.repeat(20),
+  } as never);
+
+  const ranked = rankItems([mapped]);
+
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0]?.scoreBreakdown.xArticleBonus, 10);
+  assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /X article/);
 });
 
 test('rankItems stops marking long-form Substack posts as low quality when a reader brief is present', () => {

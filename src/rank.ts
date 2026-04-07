@@ -1,5 +1,5 @@
 import type { CollectedItem, RankedItem, ScoreBreakdown } from './types.js';
-import { AUTHOR_RANKING_RULES, HARD_FILTERED_AUTHOR_USERNAMES } from './ranking-preferences.js';
+import { AUTHOR_RANKING_RULES, HARD_FILTERED_AUTHOR_USERNAMES, OFFICIAL_SOURCE_DOMAINS } from './ranking-preferences.js';
 
 const SUBSTANCE_KEYWORDS = [
   'release',
@@ -51,6 +51,20 @@ function normalizeAuthorKey(username?: string): string | undefined {
   return username.trim().replace(/^@+/, '').toLowerCase();
 }
 
+function normalizeDomain(domain?: string): string | undefined {
+  if (!domain) return undefined;
+  return domain.trim().replace(/^\.+/, '').toLowerCase();
+}
+
+function matchesOfficialDomain(domain?: string): boolean {
+  const normalizedDomain = normalizeDomain(domain);
+  if (!normalizedDomain) return false;
+
+  return OFFICIAL_SOURCE_DOMAINS.some((officialDomain) => {
+    return normalizedDomain === officialDomain || normalizedDomain.endsWith(`.${officialDomain}`);
+  });
+}
+
 function isHardFilteredAuthor(item: CollectedItem): boolean {
   const authorKey = normalizeAuthorKey(item.author.username);
   return authorKey ? HARD_FILTERED_AUTHOR_USERNAMES.includes(authorKey) : false;
@@ -69,6 +83,25 @@ function getAuthorAdjustment(item: CollectedItem): { penalty: number; bonus: num
 function extractAuthorReason(decisionReasons: string[]): string | undefined {
   const wrapped = decisionReasons.find((reason) => reason.startsWith('作者规则:'));
   return wrapped?.slice('作者规则:'.length);
+}
+
+function isOfficialSource(item: CollectedItem): boolean {
+  const authorKey = normalizeAuthorKey(item.author.username);
+  if (authorKey && AUTHOR_RANKING_RULES[authorKey]?.official) return true;
+
+  return matchesOfficialDomain(item.linkedSource?.domain);
+}
+
+function isXArticleSource(item: CollectedItem): boolean {
+  const candidates = [item.linkedSource, item.embeddedLinkedSource].filter(Boolean);
+
+  return candidates.some((source) => {
+    if (!source) return false;
+
+    if (/^https:\/\/x\.com\/i\/article\/[^/?#]+/i.test(source.url)) return true;
+
+    return normalizeDomain(source.domain) === 'x.com' && source.description?.trim().toLowerCase() === 'x article';
+  });
 }
 
 function computeFreshnessScore(item: CollectedItem, newestTimestamp: number): number {
@@ -94,6 +127,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
   const hasBrief = Boolean(item.readerBrief);
   const hasLinkedSource = Boolean(item.linkedSource);
   const { penalty: authorPenalty, bonus: authorBonus } = getAuthorAdjustment(item);
+  const xArticleBonus = isXArticleSource(item) ? 10 : 0;
 
   const substance = clamp(
     (text.length >= 80 ? 10 : 4) +
@@ -128,6 +162,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
     substance,
     evidence,
     sourceSignal,
+    xArticleBonus,
     freshness,
     novelty,
     actionability,
@@ -140,6 +175,7 @@ function toEditorialScore(breakdown: ScoreBreakdown): number {
     breakdown.substance +
     breakdown.evidence +
     breakdown.sourceSignal +
+    breakdown.xArticleBonus +
     breakdown.freshness +
     breakdown.novelty +
     breakdown.actionability +
@@ -174,6 +210,7 @@ function computeEngagementScore(item: CollectedItem, breakdown: ScoreBreakdown):
 }
 
 function buildDecisionReasons(
+  item: CollectedItem,
   breakdown: ScoreBreakdown,
   engagementReason: string | undefined,
   authorReason: string | undefined,
@@ -186,7 +223,8 @@ function buildDecisionReasons(
   if (breakdown.evidence >= 10) reasons.push('有理有据');
   if (breakdown.actionability >= 5) reasons.push('实践教程');
   if (breakdown.freshness >= 8) reasons.push('新');
-  if (breakdown.sourceSignal >= 6) reasons.push('官方');
+  if (isOfficialSource(item)) reasons.push('官方');
+  if (breakdown.xArticleBonus > 0) reasons.push('X article');
   if (breakdown.substance < 12) reasons.push('低质量内容');
   if (breakdown.evidence < 6) reasons.push('弱证据');
   if (isPromotional) reasons.push('宣发内容');
@@ -219,6 +257,7 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
       item.editorialScore = toEditorialScore(item.scoreBreakdown);
       item.priorityScore = clamp(Math.round(item.editorialScore * 0.75 + item.engagementScore * 0.25), 0, 100);
       item.decisionReasons = buildDecisionReasons(
+        item,
         item.scoreBreakdown,
         engagementReason,
         authorReason,
@@ -251,6 +290,7 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
       item.editorialScore = toEditorialScore(item.scoreBreakdown);
       item.priorityScore = clamp(Math.round(item.editorialScore * 0.75 + item.engagementScore * 0.25), 0, 100);
       item.decisionReasons = buildDecisionReasons(
+        item,
         item.scoreBreakdown,
         engagementReason,
         authorReason,
@@ -287,7 +327,7 @@ export function rankItems(items: CollectedItem[]): RankedItem[] {
       editorialScore,
       engagementScore,
       priorityScore,
-      decisionReasons: buildDecisionReasons(scoreBreakdown, engagementReason, authorReason, undefined, isPromotional),
+      decisionReasons: buildDecisionReasons(item, scoreBreakdown, engagementReason, authorReason, undefined, isPromotional),
     };
   });
 

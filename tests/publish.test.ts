@@ -26,6 +26,7 @@ test('writeSelectionReport persists ranking, curation, and human selection metad
           substance: 24,
           evidence: 14,
           sourceSignal: 6,
+          xArticleBonus: 0,
           freshness: 9,
           novelty: 15,
           actionability: 0,

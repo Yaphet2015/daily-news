@@ -104,7 +104,9 @@ Suggested dimensions:
 - `evidence`
   - external links, screenshots, charts, media assets, Substack reader brief claims, concrete supporting detail
 - `sourceSignal`
-  - official source, credible publication, identifiable operator, clear domain expertise
+  - broad credibility signals such as credible publication, identifiable operator, clear domain expertise
+- `xArticleBonus`
+  - explicit fixed boost for genuine X long-form articles, separate from generic evidence/source scoring
 - `freshness`
   - favor newer items, but with a smooth decay rather than a cliff
 - `novelty`
@@ -121,6 +123,7 @@ Suggested v1 shape:
 - `substance`: 0-30
 - `evidence`: 0-20
 - `sourceSignal`: 0-15
+- `xArticleBonus`: 0 or 10
 - `freshness`: 0-10
 - `novelty`: 0-15
 - `actionability`: 0-10
@@ -176,6 +179,7 @@ Recommended reason phrases:
 - `高信息密度`
 - `有理有据`
 - `官方`
+- `X article`
 - `实践教程`
 - `新`
 - `重复内容:<item-id>`
@@ -184,6 +188,8 @@ Recommended reason phrases:
 - `宣发内容`
 - `互动支持:仅作辅助信号`
 - `作者规则:<规则说明>`
+
+`官方` should be reserved for explicit allowlisted官号 or official domains, not inferred from generic credibility or source resolution alone.
 
 These codes should be produced deterministically by the ranking layer.
 
