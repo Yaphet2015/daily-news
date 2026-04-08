@@ -338,6 +338,14 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
       curatedItem.editorialReason = item.editorialReason;
     }
 
+    if (sourceItem?.sourceResolution) {
+      curatedItem.sourceResolution = sourceItem.sourceResolution;
+    }
+
+    if (sourceItem?.source === 'twitter' && sourceItem.sourceResolution?.decision === 'keep_origin') {
+      curatedItem.originText = sourceItem.text;
+    }
+
     return curatedItem;
   });
 }

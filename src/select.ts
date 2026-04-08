@@ -1,8 +1,9 @@
 import { checkbox } from '@inquirer/prompts';
-import type { CuratedItem } from './types.js';
+import type { CuratedItem, MediaAsset } from './types.js';
 
 const PREVIEW_LINE_LENGTH = 70;
 const PREVIEW_MAX_LINES = 3;
+const SHORT_TWEET_THRESHOLD = 500;
 
 function formatPreview(summary: string): string[] {
   const lines: string[] = [];
@@ -19,6 +20,25 @@ function formatPreview(summary: string): string[] {
   return lines;
 }
 
+function formatMediaPlaceholder(media: MediaAsset[]): string | null {
+  if (media.length === 0) return null;
+  const photoCount = media.filter((m) => m.type === 'photo').length;
+  const videoCount = media.filter((m) => m.type === 'video' || m.type === 'animated_gif').length;
+  const parts: string[] = [];
+  if (photoCount > 0) parts.push(`${photoCount} photo${photoCount > 1 ? 's' : ''}`);
+  if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+  return parts.length > 0 ? `[📷 ${parts.join(', ')}]` : null;
+}
+
+function isShortOriginTweet(item: CuratedItem): boolean {
+  return (
+    item.source === 'twitter' &&
+    item.sourceResolution?.decision === 'keep_origin' &&
+    item.originText != null &&
+    item.originText.length <= SHORT_TWEET_THRESHOLD
+  );
+}
+
 export function formatSelectionLabel(item: CuratedItem, index: number): string {
   const metadata = `${item.source} · ${item.attribution} · ${item.author}`;
   const rankingHint =
@@ -29,13 +49,20 @@ export function formatSelectionLabel(item: CuratedItem, index: number): string {
   const originUrl = item.originUrl ?? item.url;
   const resolvedUrl = item.originUrl && item.originUrl !== item.url ? `来源: ${item.url}` : null;
 
+  const contentLines = isShortOriginTweet(item)
+    ? [
+        ...formatPreview(item.originText!).map((line) => `      ${line}`),
+        ...(item.media.length > 0 ? [`      ${formatMediaPlaceholder(item.media)!}`] : []),
+      ]
+    : formatPreview(item.summary).map((line) => `      ${line}`);
+
   return [
     `${String(index + 1).padStart(2, ' ')}. ${item.title}`,
     `      ${metadata}`,
     rankingHint ? `      ${rankingHint}` : null,
     `      原帖: ${originUrl}`,
     resolvedUrl ? `      ${resolvedUrl}` : null,
-    ...formatPreview(item.summary).map((line) => `      ${line}`),
+    ...contentLines,
   ]
     .filter(Boolean)
     .join('\n');

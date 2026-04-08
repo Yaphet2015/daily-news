@@ -115,6 +115,8 @@ export interface CuratedItem {
   priorityScore?: number;
   decisionReasons?: string[];
   editorialReason?: string;
+  originText?: string;
+  sourceResolution?: SourceResolution;
 }
 
 export interface FormatResult {
