@@ -366,7 +366,7 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
   }
 
   const systemPrompt = await readFile(PROMPT_PATH, 'utf-8');
-  const enrichedItems = await attachReaderBriefs(items);
+  const enrichedItems = items;
   const userContent =
     `以下是从多个信息源采集的 ${enrichedItems.length} 条内容，请按要求筛选整理：\n\n` +
     buildCollectedItemsPayload(enrichedItems);

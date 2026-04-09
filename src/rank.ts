@@ -67,7 +67,7 @@ function matchesOfficialDomain(domain?: string): boolean {
 
 function isHardFilteredAuthor(item: CollectedItem): boolean {
   const authorKey = normalizeAuthorKey(item.author.username);
-  return authorKey ? HARD_FILTERED_AUTHOR_USERNAMES.includes(authorKey) : false;
+  return authorKey ? (HARD_FILTERED_AUTHOR_USERNAMES as readonly string[]).includes(authorKey) : false;
 }
 
 function getAuthorAdjustment(item: CollectedItem): { penalty: number; bonus: number; reason?: string } {

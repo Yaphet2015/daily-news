@@ -663,7 +663,7 @@ test('resolveTwitterPrimarySource skips short-link resolution when structured ou
   assert.equal(resolved.url, 'https://docs.example.com/launch');
 });
 
-test('resolveTwitterPrimarySources processes reply enrichment sequentially', async () => {
+test('resolveTwitterPrimarySources processes items concurrently with bounded concurrency', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySources, 'function');
 
   const resolveTwitterPrimarySources = (collectModule as Record<string, Function>).resolveTwitterPrimarySources;
@@ -708,7 +708,7 @@ test('resolveTwitterPrimarySources processes reply enrichment sequentially', asy
     },
   );
 
-  assert.equal(maxInFlight, 1);
+  assert.ok(maxInFlight >= 1 && maxInFlight <= 2, `expected maxInFlight between 1 and 2, got ${maxInFlight}`);
   assert.deepEqual(resolved.map((item: { id: string }) => item.id), ['tw-1', 'tw-2']);
 });
 

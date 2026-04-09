@@ -409,6 +409,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       media: [{ type: 'photo', url: 'https://img/cover.jpg' }],
       priorityScore: 58,
       decisionReasons: ['高信息密度', '有理有据'],
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
     },
     {
       id: 'tw-2',

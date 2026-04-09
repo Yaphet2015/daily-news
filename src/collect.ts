@@ -986,19 +986,44 @@ function buildResolveUrlCurlArgs(url: string, proxy: string | undefined): string
   ];
 }
 
-async function resolveShortUrl(url: string): Promise<string | null> {
-  const proxy = resolveHttpProxy();
-  try {
-    const { stdout } = await execFileAsync('curl', buildResolveUrlCurlArgs(url, proxy), {
-      maxBuffer: 256 * 1024,
-    });
-    const resolved = stdout.trim();
-    return resolved.length > 0 ? resolved : null;
-  } catch (error) {
-    console.warn(`[collect] 跳过短链接解析 ${url}: ${summarizeError(error)}`);
-    return null;
-  }
+function isTransientCurlError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  // curl exit code 28 = timeout, 35 = SSL connect error
+  return /(?:exit code 2[89]|exit code 3[0-9]|SSL_ERROR|ECONNRESET|EPIPE)/i.test(msg);
 }
+
+function createShortUrlResolver(): (url: string, retries?: number) => Promise<string | null> {
+  const cache = new Map<string, string | null>();
+  return async (url: string, retries = 2): Promise<string | null> => {
+    if (cache.has(url)) return cache.get(url)!;
+    const result = await resolveShortUrlUncached(url, retries);
+    cache.set(url, result);
+    return result;
+  };
+}
+
+async function resolveShortUrlUncached(url: string, retries = 2): Promise<string | null> {
+  const proxy = resolveHttpProxy();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const { stdout } = await execFileAsync('curl', buildResolveUrlCurlArgs(url, proxy), {
+        maxBuffer: 256 * 1024,
+      });
+      const resolved = stdout.trim();
+      return resolved.length > 0 ? resolved : null;
+    } catch (error) {
+      if (attempt < retries && isTransientCurlError(error)) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      console.warn(`[collect] 跳过短链接解析 ${url}: ${summarizeError(error)}`);
+      return null;
+    }
+  }
+  return null;
+}
+
+const resolveShortUrl = resolveShortUrlUncached;
 
 async function enrichTwitterTextCandidates(
   item: CollectedItem,
@@ -1128,15 +1153,30 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
   if (!normalizedUrl) return null;
   if (!isLikelyPrimarySourceUrl(normalizedUrl)) return null;
 
-  let stdout: string;
+  let stdout = '';
   try {
     const proxy = resolveHttpProxy();
-    const response = await execFileAsync(
-      'curl',
-      buildGenericCurlArgs(normalizedUrl, proxy),
-      { maxBuffer: 2 * 1024 * 1024 },
-    );
-    stdout = response.stdout;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        const response = await execFileAsync(
+          'curl',
+          buildGenericCurlArgs(normalizedUrl, proxy),
+          { maxBuffer: 2 * 1024 * 1024 },
+        );
+        stdout = response.stdout;
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 1 && isTransientCurlError(error)) {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (lastError) throw lastError;
   } catch (error) {
     console.warn(`[collect] 跳过外链抓取 ${normalizedUrl}: ${summarizeError(error)}`);
     return null;
@@ -1614,13 +1654,18 @@ export async function resolveTwitterPrimarySources(
   options: ResolveTwitterPrimarySourcesOptions = {},
 ): Promise<CollectedItem[]> {
   const resolveTwitterPrimarySourceImpl = options.resolveTwitterPrimarySource ?? resolveTwitterPrimarySource;
-  const resolved: CollectedItem[] = [];
+  const results = new Array<CollectedItem>(items.length);
+  let index = 0;
 
-  for (const item of items) {
-    resolved.push(await resolveTwitterPrimarySourceImpl(item));
+  async function runNext(): Promise<void> {
+    const i = index++;
+    if (i >= items.length) return;
+    results[i] = await resolveTwitterPrimarySourceImpl(items[i]);
+    await runNext();
   }
 
-  return resolved;
+  await Promise.all(Array.from({ length: 2 }, runNext));
+  return results;
 }
 
 async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> {
@@ -1646,7 +1691,13 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
   }
 
   const filtered = filterSinceTime(items, sinceTime);
-  const resolved = await resolveTwitterPrimarySources(filtered);
+  const sharedShortUrlResolver = createShortUrlResolver();
+  const resolved = await resolveTwitterPrimarySources(filtered, {
+    resolveTwitterPrimarySource: (item) =>
+      resolveTwitterPrimarySource(item, {
+        resolveShortUrl: sharedShortUrlResolver,
+      }),
+  });
   console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);
   return sortNewestFirst(resolved);
 }
@@ -1766,14 +1817,25 @@ export async function collectSubstackItems({
     const fetchFeed = deps?.fetchPublicationFeed ?? fetchPublicationFeed;
     const publications = await fetchPublications();
 
-    for (const publication of publications) {
-      let feed: PublicSubstackFeed;
+    const feedResults = new Array<PublicSubstackFeed | null>(publications.length);
+    let pubIndex = 0;
+
+    async function fetchNextFeed(): Promise<void> {
+      const i = pubIndex++;
+      if (i >= publications.length) return;
       try {
-        feed = await fetchFeed(publication);
+        feedResults[i] = await fetchFeed(publications[i]);
       } catch (error) {
-        warnSubstackFeedFailure(publication, error);
-        continue;
+        warnSubstackFeedFailure(publications[i], error);
+        feedResults[i] = null;
       }
+      await fetchNextFeed();
+    }
+
+    await Promise.all(Array.from({ length: 3 }, fetchNextFeed));
+
+    for (const feed of feedResults) {
+      if (!feed) continue;
       let collectedForPublication = 0;
 
       for (const post of feed.posts) {
@@ -1804,13 +1866,20 @@ export async function collectSources({
   state,
   collectors,
 }: CollectSourcesOptions): Promise<CollectionSnapshot> {
-  const mergedItems: CollectedItem[] = [];
+  const sourceResults = await Promise.allSettled(
+    enabledSources.map(async (source) => {
+      const sinceTime = getSourceSinceTime(state, source, nowSeconds);
+      return { source, items: await collectors[source](sinceTime) };
+    }),
+  );
 
-  for (const source of enabledSources) {
-    const collectSource = collectors[source];
-    const sinceTime = getSourceSinceTime(state, source, nowSeconds);
-    const items = await collectSource(sinceTime);
-    mergedItems.push(...items);
+  const mergedItems: CollectedItem[] = [];
+  for (const result of sourceResults) {
+    if (result.status === 'fulfilled') {
+      mergedItems.push(...result.value.items);
+    } else {
+      console.warn(`[collect] 数据源采集失败: ${summarizeError(result.reason)}`);
+    }
   }
 
   return {
