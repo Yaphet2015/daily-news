@@ -287,7 +287,7 @@ test('buildCollectedItemsPayload uses reader brief for Substack items instead of
   assert.doesNotMatch(payload, /THIS SHOULD NOT APPEAR/);
 });
 
-test('enrichCuratedItems restores source metadata, attribution, and media by matching id when urls collide', () => {
+test('enrichCuratedItems restores source metadata, attribution, and media by matching id', () => {
   assert.equal(typeof curateModule.enrichCuratedItems, 'function');
 
   const items = [
@@ -301,9 +301,9 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
     },
     {
       id: 'tw-2',
-      title: 'Competing wrapper',
-      summary: 'Wrapper summary',
-      url: 'https://docs.example.com/launch',
+      title: 'Other launch',
+      summary: 'Other summary',
+      url: 'https://docs.example.com/other',
       author: 'ignored-2',
       category: 'Product',
     },
@@ -360,7 +360,7 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       sourceLabel: 'OpenAI Docs',
       author: { name: 'Other', username: 'other' },
       publishedAt: '2026-03-15T08:01:00Z',
-      url: 'https://docs.example.com/launch',
+      url: 'https://docs.example.com/other',
       media: [],
     },
     {
@@ -413,9 +413,9 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
     },
     {
       id: 'tw-2',
-      title: 'Competing wrapper',
-      summary: 'Wrapper summary',
-      url: 'https://docs.example.com/launch',
+      title: 'Other launch',
+      summary: 'Other summary',
+      url: 'https://docs.example.com/other',
       originUrl: 'https://x.com/other/status/2',
       author: 'other',
       category: 'Product',
@@ -423,18 +423,136 @@ test('enrichCuratedItems restores source metadata, attribution, and media by mat
       attribution: 'OpenAI Docs',
       media: [],
     },
+  ]);
+});
+
+test('enrichCuratedItems drops untrusted model rows with unknown ids or mismatched urls', () => {
+  const items = [
+    {
+      id: 'known',
+      title: 'Known',
+      summary: 'Known summary',
+      url: 'https://example.com/known',
+      author: 'ignored',
+      category: 'Product',
+    },
+    {
+      id: 'known',
+      title: 'Wrong URL',
+      summary: 'Wrong URL summary',
+      url: 'https://example.com/other-story',
+      author: 'ignored',
+      category: 'Product',
+    },
     {
       id: 'missing',
       title: 'Missing',
       summary: 'Missing summary',
-      url: 'https://x.com/missing/status/9',
+      url: 'https://example.com/missing',
       author: 'missing',
       category: 'Tutorial',
+    },
+  ];
+
+  const collectedItems = [
+    {
+      id: 'known',
       source: 'twitter',
-      attribution: '@missing',
+      text: 'known source text',
+      author: { name: 'Alice', username: 'alice' },
+      publishedAt: '2026-04-09T08:00:00Z',
+      url: 'https://example.com/known',
       media: [],
     },
-  ]);
+  ];
+
+  assert.deepEqual(
+    curateModule.enrichCuratedItems(items as never[], collectedItems as never[]).map((item) => item.id),
+    ['known'],
+  );
+});
+
+test('enrichCuratedItems dedupes repeated model rows by id and canonical url', () => {
+  const items = [
+    {
+      id: 'lower-score',
+      title: 'Lower',
+      summary: 'Lower summary',
+      url: 'https://example.com/shared',
+      author: 'ignored',
+      category: 'Product',
+    },
+    {
+      id: 'higher-score',
+      title: 'Higher',
+      summary: 'Higher summary',
+      url: 'https://example.com/shared',
+      author: 'ignored',
+      category: 'Product',
+    },
+    {
+      id: 'higher-score',
+      title: 'Higher duplicate',
+      summary: 'Higher duplicate summary',
+      url: 'https://example.com/shared',
+      author: 'ignored',
+      category: 'Product',
+    },
+  ];
+
+  const collectedItems = [
+    {
+      id: 'lower-score',
+      source: 'twitter',
+      text: 'lower',
+      author: { name: 'Alice', username: 'alice' },
+      publishedAt: '2026-04-09T08:00:00Z',
+      url: 'https://example.com/shared',
+      media: [],
+      editorialScore: 60,
+      engagementScore: 0,
+      priorityScore: 40,
+      decisionReasons: [],
+      scoreBreakdown: {
+        substance: 20,
+        evidence: 10,
+        sourceSignal: 5,
+        xArticleBonus: 0,
+        freshness: 8,
+        novelty: 15,
+        actionability: 0,
+        penalties: 0,
+      },
+    },
+    {
+      id: 'higher-score',
+      source: 'twitter',
+      text: 'higher',
+      author: { name: 'Bob', username: 'bob' },
+      publishedAt: '2026-04-09T08:01:00Z',
+      url: 'https://example.com/shared',
+      media: [],
+      editorialScore: 80,
+      engagementScore: 0,
+      priorityScore: 70,
+      decisionReasons: [],
+      scoreBreakdown: {
+        substance: 25,
+        evidence: 15,
+        sourceSignal: 7,
+        xArticleBonus: 0,
+        freshness: 8,
+        novelty: 15,
+        actionability: 0,
+        penalties: 0,
+      },
+    },
+  ];
+
+  const enriched = curateModule.enrichCuratedItems(items as never[], collectedItems as never[]);
+
+  assert.deepEqual(enriched.map((item) => item.id), ['higher-score']);
+  assert.equal(enriched[0]?.title, 'Higher');
 });
 
 test('curator prompt requires materially longer investigative summaries, editorial reasons, and fixed categories', () => {

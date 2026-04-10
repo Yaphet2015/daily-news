@@ -93,6 +93,23 @@ function getAttribution(item: CollectedItem): string {
   return `@${item.author.username ?? item.author.name}`;
 }
 
+function normalizeUrl(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  try {
+    const url = new URL(trimmed);
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    url.hash = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed;
+  }
+}
+
+function hasHigherPriority(candidate: CuratedItem, current: CuratedItem): boolean {
+  return (candidate.priorityScore ?? Number.NEGATIVE_INFINITY) > (current.priorityScore ?? Number.NEGATIVE_INFINITY);
+}
+
 function formatReaderBrief(brief: ReaderBrief): string {
   const formatList = (label: string, values: string[]) =>
     values.length > 0 ? `${label}:\n${values.map((value) => `- ${value}`).join('\n')}` : `${label}: none`;
@@ -310,22 +327,25 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
 export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: CollectedItem[]): CuratedItem[] {
   const itemById = new Map(collectedItems.map((item) => [item.id, item]));
 
-  return items.map((item) => {
+  const enrichedItems = items.flatMap((item) => {
     const sourceItem = itemById.get(item.id);
+    if (!sourceItem || normalizeUrl(item.url) !== normalizeUrl(sourceItem.url)) return [];
+
     const author =
-      sourceItem?.author.username ??
-      sourceItem?.author.name ??
+      sourceItem.author.username ??
+      sourceItem.author.name ??
       item.author;
 
     const curatedItem: CuratedItem = {
       ...item,
+      url: sourceItem.url,
       author,
-      source: sourceItem?.source ?? 'twitter',
-      attribution: sourceItem ? getAttribution(sourceItem) : `@${item.author}`,
-      media: sourceItem?.media ?? [],
+      source: sourceItem.source,
+      attribution: getAttribution(sourceItem),
+      media: sourceItem.media,
     };
 
-    if (sourceItem?.originUrl) {
+    if (sourceItem.originUrl) {
       curatedItem.originUrl = sourceItem.originUrl;
     }
 
@@ -338,16 +358,35 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
       curatedItem.editorialReason = item.editorialReason;
     }
 
-    if (sourceItem?.sourceResolution) {
+    if (sourceItem.sourceResolution) {
       curatedItem.sourceResolution = sourceItem.sourceResolution;
     }
 
-    if (sourceItem?.source === 'twitter' && sourceItem.sourceResolution?.decision === 'keep_origin') {
+    if (sourceItem.source === 'twitter' && sourceItem.sourceResolution?.decision === 'keep_origin') {
       curatedItem.originText = sourceItem.text;
     }
 
-    return curatedItem;
+    return [curatedItem];
   });
+
+  const byId = new Map<string, CuratedItem>();
+  for (const item of enrichedItems) {
+    const current = byId.get(item.id);
+    if (!current || hasHigherPriority(item, current)) {
+      byId.set(item.id, item);
+    }
+  }
+
+  const byUrl = new Map<string, CuratedItem>();
+  for (const item of byId.values()) {
+    const key = normalizeUrl(item.url);
+    const current = byUrl.get(key);
+    if (!current || hasHigherPriority(item, current)) {
+      byUrl.set(key, item);
+    }
+  }
+
+  return Array.from(byUrl.values());
 }
 
 async function curateWithModel(systemPrompt: string, userContent: string): Promise<LlmCuratedItem[]> {
@@ -374,6 +413,9 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
   console.log('[curate] 预处理 Substack 文章并调用主整理模型...');
   const llmItems = await curateWithModel(systemPrompt, userContent);
   const curatedItems = enrichCuratedItems(llmItems, enrichedItems);
+  if (curatedItems.length < llmItems.length) {
+    console.warn(`[curate] 已丢弃 ${llmItems.length - curatedItems.length} 条重复或无效的 AI 输出条目`);
+  }
   warnOnUnderfilledCuratedItems(curatedItems.length);
 
   console.log(`[curate] AI 整理完成，共 ${curatedItems.length} 条资讯`);
