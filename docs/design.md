@@ -7,7 +7,7 @@
 
 1）收集来源。当前包括一个 twitter list，再加上我 Substack 账号 follow 的 publications；后面有需要再增补新的列表或 Blog RSS 地址
 
- [https://x.com/i/lists/1602502639287435265](https://x.com/i/lists/1602502639287435265)
+ [https://x.com/i/lists/2043983199311913431](https://x.com/i/lists/2043983199311913431)
 
 2）收集资讯。Twitter 优先通过 `twitter-cli` 收集 list，这样可以直接保留更完整的媒体信息（尤其是图片 URL / 尺寸），失败时再回退到 [twitterapi.io](http://twitterapi.io/)。Substack 则通过登录态列出已订阅 publications，再抓取每个 publication 的最新文章。两边都做来源级增量采集，避免重复吃旧内容。Substack 的公开 RSS 抓取按 publication best-effort 处理：如果某个站点自己的 feed 因为坏重定向、TLS 握手或超时失败，该 publication 会被记录 warning 并跳过，不会拖垮整次采集；但像缺少 `SUBSTACK_PUBLICATION_URL` 这类本地配置错误仍然直接失败。采集成功后，原始采集结果要立即写入单份 pending draft，供后续失败时恢复；`state.json` 不在这一步推进，只记录最近一次成功发布到本地输出的采集时间。Twitter 采集完成后还要多做一层 source 归一化：优先使用结构化外链字段；如果 `twitter-cli` 漏掉了正文里的 `t.co`，就再做一次短链解析；最终允许成为主 source 的链接只包括官方网站 / 个人博客等外部页面，以及 `x.com/i/article/...` 这种 X 长文 article。普通 X status 只能作为线索继续往下追，不算最终来源；视频页和直链媒体文件也不算来源。只有正文和 quoted 线索都没能落到合格来源时，才去看最近 1-3 条 replies 里的外链，并轻量读取候选页面。若 tweet 仍明显是在转述、摘要或分发外链页面，即使 tweet 本身较长，也要把那个外部页面当最终引用目标；只有当 tweet 明显是独立分析、与外链上下文重叠很低时，才继续保留 X origin。这个 canonicalization 只追一跳：像报告页里再挂的论文 / PDF 不继续升级成最终来源。原 tweet 链接只保留作审计元数据；人工 `select` 阶段会同时显示原帖 URL 和最终来源 URL，方便肉眼核对。
 

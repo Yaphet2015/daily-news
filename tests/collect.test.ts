@@ -314,8 +314,8 @@ test('buildTwitterCliCommand exports HTTP_PROXY for twitter-cli', () => {
   const buildTwitterCliCommand = (collectModule as Record<string, Function>).buildTwitterCliCommand;
 
   assert.equal(
-    buildTwitterCliCommand('1602502639287435265', 500, 'http://127.0.0.1:6152'),
-    'HTTP_PROXY=http://127.0.0.1:6152 HTTPS_PROXY=http://127.0.0.1:6152 twitter list 1602502639287435265 --max 500 --json',
+    buildTwitterCliCommand('2043983199311913431', 500, 'http://127.0.0.1:6152'),
+    'HTTP_PROXY=http://127.0.0.1:6152 HTTPS_PROXY=http://127.0.0.1:6152 twitter list 2043983199311913431 --max 500 --json',
   );
 });
 

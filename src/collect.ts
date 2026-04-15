@@ -1669,7 +1669,7 @@ export async function resolveTwitterPrimarySources(
 }
 
 async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> {
-  const listId = process.env.TWITTER_LIST_ID ?? '1602502639287435265';
+  const listId = process.env.TWITTER_LIST_ID ?? '2043983199311913431';
   console.log(
     `[collect] 采集 Twitter listId=${listId}，sinceTime=${new Date(sinceTime * 1000).toLocaleString('zh-CN')}`,
   );
