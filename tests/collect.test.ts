@@ -308,15 +308,65 @@ test('buildSubstackCurlArgs routes requests through HTTP_PROXY', () => {
   ]);
 });
 
-test('buildTwitterCliCommand exports HTTP_PROXY for twitter-cli', () => {
+test('buildTwitterCliCommand exports TWITTER_PROXY and HTTP(S)_PROXY for twitter-cli', () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).buildTwitterCliCommand, 'function');
 
   const buildTwitterCliCommand = (collectModule as Record<string, Function>).buildTwitterCliCommand;
 
   assert.equal(
     buildTwitterCliCommand('2043983199311913431', 500, 'http://127.0.0.1:6152'),
-    'HTTP_PROXY=http://127.0.0.1:6152 HTTPS_PROXY=http://127.0.0.1:6152 twitter list 2043983199311913431 --max 500 --json',
+    'TWITTER_PROXY=http://127.0.0.1:6152 HTTP_PROXY=http://127.0.0.1:6152 HTTPS_PROXY=http://127.0.0.1:6152 twitter list 2043983199311913431 --max 500 --json',
   );
+});
+
+test('summarizeTwitterCliError prefers structured stdout payloads over stderr warnings', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).summarizeTwitterCliError, 'function');
+
+  const summarizeTwitterCliError = (collectModule as Record<string, Function>).summarizeTwitterCliError;
+  const error = Object.assign(
+    new Error('Command failed: twitter tweet 2044861930884776000 --max 3 --json'),
+    {
+      stdout: JSON.stringify({
+        ok: false,
+        error: {
+          code: 'not_authenticated',
+          message: 'No Twitter cookies found.',
+        },
+      }),
+      stderr:
+        "WARNING twitter_cli.client: Failed to init ClientTransaction: 'NoneType' object has no attribute 'split'",
+    },
+  );
+
+  assert.equal(summarizeTwitterCliError(error), 'No Twitter cookies found.');
+});
+
+test('summarizeTwitterCliError falls back to stderr when stdout is not structured JSON', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).summarizeTwitterCliError, 'function');
+
+  const summarizeTwitterCliError = (collectModule as Record<string, Function>).summarizeTwitterCliError;
+  const error = Object.assign(new Error('Command failed: twitter list 1 --max 3 --json'), {
+    stdout: '',
+    stderr: 'WARNING twitter_cli.client: Failed to init ClientTransaction: timed out',
+  });
+
+  assert.equal(summarizeTwitterCliError(error), 'WARNING twitter_cli.client: Failed to init ClientTransaction: timed out');
+});
+
+test('summarizeTwitterCliError prefers the terminal traceback line when stderr is a Python traceback', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).summarizeTwitterCliError, 'function');
+
+  const summarizeTwitterCliError = (collectModule as Record<string, Function>).summarizeTwitterCliError;
+  const error = Object.assign(new Error('Command failed: twitter tweet 1 --max 3 --json'), {
+    stdout: '',
+    stderr: `Traceback (most recent call last):
+  File "/Users/suosuo/.local/bin/twitter", line 10, in <module>
+    sys.exit(cli())
+RuntimeError: Invalid tweet ID: tw-fail-open
+`,
+  });
+
+  assert.equal(summarizeTwitterCliError(error), 'RuntimeError: Invalid tweet ID: tw-fail-open');
 });
 
 test('parseTwitterCliReplyPayload accepts wrapped twitter-cli reply payloads', () => {

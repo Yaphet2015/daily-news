@@ -719,13 +719,18 @@ export function buildSubstackCurlArgs(url: string, proxy: string | undefined): s
 }
 
 export function buildTwitterCliCommand(listId: string, maxTweets: number, proxy: string | undefined): string {
-  const proxyPrefix = proxy ? `HTTP_PROXY=${proxy} HTTPS_PROXY=${proxy} ` : '';
+  const proxyPrefix = buildTwitterCliEnvPrefix(proxy);
   return `${proxyPrefix}twitter list ${listId} --max ${maxTweets} --json`;
 }
 
 function buildTwitterReplyCommand(tweetId: string, maxReplies: number, proxy: string | undefined): string {
-  const proxyPrefix = proxy ? `HTTP_PROXY=${proxy} HTTPS_PROXY=${proxy} ` : '';
+  const proxyPrefix = buildTwitterCliEnvPrefix(proxy);
   return `${proxyPrefix}twitter tweet ${tweetId} --max ${maxReplies} --json`;
+}
+
+function buildTwitterCliEnvPrefix(proxy: string | undefined): string {
+  if (!proxy) return '';
+  return `TWITTER_PROXY=${proxy} HTTP_PROXY=${proxy} HTTPS_PROXY=${proxy} `;
 }
 
 function buildGenericCurlArgs(url: string, proxy: string | undefined): string[] {
@@ -764,6 +769,76 @@ function summarizeError(error: unknown): string {
   }
 
   return String(error);
+}
+
+function extractTwitterCliErrorMessage(stdout: string): string | undefined {
+  if (!stdout.trim()) return undefined;
+
+  try {
+    const payload = JSON.parse(stdout) as {
+      error?: string | { message?: string };
+      message?: string;
+    };
+
+    if (typeof payload?.error === 'string' && payload.error.trim()) {
+      return payload.error.trim();
+    }
+
+    if (
+      payload?.error &&
+      typeof payload.error === 'object' &&
+      typeof payload.error.message === 'string' &&
+      payload.error.message.trim()
+    ) {
+      return payload.error.message.trim();
+    }
+
+    if (typeof payload?.message === 'string' && payload.message.trim()) {
+      return payload.message.trim();
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function extractTwitterCliTracebackMessage(stderr: string): string | undefined {
+  const lines = stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (!lines.some((line) => line.startsWith('Traceback '))) return undefined;
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (/^[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception):\s+/.test(line)) {
+      return line;
+    }
+  }
+
+  return undefined;
+}
+
+export function summarizeTwitterCliError(error: unknown): string {
+  if (error instanceof Error) {
+    const stdoutMessage = extractTwitterCliErrorMessage((error as Error & { stdout?: string }).stdout ?? '');
+    if (stdoutMessage) return stdoutMessage;
+
+    const tracebackMessage = extractTwitterCliTracebackMessage((error as Error & { stderr?: string }).stderr ?? '');
+    if (tracebackMessage) return tracebackMessage;
+  }
+
+  return summarizeError(error);
+}
+
+async function execTwitterCliCommand(command: string, maxBuffer: number): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execAsync(command, { maxBuffer });
+  } catch (error) {
+    throw new Error(summarizeTwitterCliError(error), { cause: error instanceof Error ? error : undefined });
+  }
 }
 
 function stripTrackingTitle(value: string): string {
@@ -1242,9 +1317,7 @@ export function parseTwitterCliReplyPayload(payload: TwitterCliReplyPayload): Tw
 
 async function fetchTwitterRepliesViaCli(tweetId: string, maxReplies: number): Promise<ReplyContext[]> {
   const proxy = resolveHttpProxy();
-  const { stdout } = await execAsync(buildTwitterReplyCommand(tweetId, maxReplies, proxy), {
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const { stdout } = await execTwitterCliCommand(buildTwitterReplyCommand(tweetId, maxReplies, proxy), 10 * 1024 * 1024);
   const payload = parseTwitterCliReplyPayload(JSON.parse(stdout) as TwitterCliReplyPayload);
   return payload.slice(1, 1 + maxReplies).map((reply) => ({
     id: reply.id,
@@ -1302,9 +1375,7 @@ function extractTweetIdFromStatusUrl(url: string): string | null {
 
 async function fetchTwitterTweetViaCli(tweetId: string): Promise<TwitterCliTweet | null> {
   const proxy = resolveHttpProxy();
-  const { stdout } = await execAsync(buildTwitterReplyCommand(tweetId, 1, proxy), {
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const { stdout } = await execTwitterCliCommand(buildTwitterReplyCommand(tweetId, 1, proxy), 10 * 1024 * 1024);
   const payload = parseTwitterCliReplyPayload(JSON.parse(stdout) as TwitterCliReplyPayload);
   return payload[0] ?? null;
 }
@@ -1395,9 +1466,9 @@ async function collectViaCli(listId: string, maxTweets: number): Promise<Collect
   const proxy = resolveHttpProxy();
   console.log(`[collect] 使用 twitter-cli 采集`);
 
-  const { stdout, stderr } = await execAsync(
+  const { stdout, stderr } = await execTwitterCliCommand(
     buildTwitterCliCommand(listId, maxTweets, proxy),
-    { maxBuffer: 50 * 1024 * 1024 },
+    50 * 1024 * 1024,
   );
 
   if (stderr && !stderr.includes('Getting Twitter cookies')) {

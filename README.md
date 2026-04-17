@@ -54,11 +54,11 @@ npm run generate
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `HTTP_PROXY` | 否 | `twitter-cli` 与 Substack 抓取共用的代理，为空时使用系统代理` |
+| `HTTP_PROXY` | 否 | 项目级代理入口；采集时会同时转发给 Substack 抓取和 `twitter-cli`（内部会映射为 `TWITTER_PROXY` + `HTTP_PROXY` + `HTTPS_PROXY`），为空时使用系统代理 |
 | `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 
-说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。
+说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。`twitter-cli` 在失败时可能把结构化错误写到 `stdout`、把诊断 warning 写到 `stderr`；项目会优先展示结构化错误消息，便于排查认证和代理问题。
 
 **获取 twitterapi.io API Key：**
 1. 前往 [https://twitterapi.io](https://twitterapi.io) 注册账号

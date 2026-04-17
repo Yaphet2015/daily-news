@@ -21,3 +21,6 @@ Thumbs.db
 # Build
 dist/
 *.tsbuildinfo
+
+# Local worktrees
+.worktrees/
