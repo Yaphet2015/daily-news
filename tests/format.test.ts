@@ -84,3 +84,29 @@ test('format uses the explicit collection date for titles and frontmatter', () =
   assert.match(result.substack, /<h1>AI 日刊 · 2026-03-10<\/h1>/);
   assert.equal(result.date, '2026-03-10');
 });
+
+test('format keeps self-thread items linked to the root X status', () => {
+  const result = format(
+    [
+      {
+        id: 'thread-1',
+        title: 'Thread title',
+        summary: 'Thread summary',
+        url: 'https://x.com/alice/status/thread-1',
+        originUrl: 'https://x.com/alice/status/thread-1',
+        author: 'alice',
+        attribution: '@alice',
+        source: 'twitter',
+        category: 'Product',
+        media: [],
+        threadPartCount: 20,
+      },
+    ] as never[],
+    '2026-04-21',
+  );
+
+  assert.match(result.obsidian, /来源：\[@alice\]\(https:\/\/x\.com\/alice\/status\/thread-1\)/);
+  assert.match(result.substack, /<p>来源：<a href="https:\/\/x\.com\/alice\/status\/thread-1" target="_blank">@alice<\/a><\/p>/);
+  assert.doesNotMatch(result.obsidian, /lessons\.md/);
+  assert.doesNotMatch(result.substack, /lessons\.md/);
+});

@@ -40,7 +40,8 @@ function isShortOriginTweet(item: CuratedItem): boolean {
 }
 
 export function formatSelectionLabel(item: CuratedItem, index: number): string {
-  const metadata = `${item.source} · ${item.attribution} · ${item.author}`;
+  const threadMetadata = item.threadPartCount ? ` · thread · ${item.threadPartCount} posts` : '';
+  const metadata = `${item.source} · ${item.attribution} · ${item.author}${threadMetadata}`;
   const rankingHint =
     typeof item.priorityScore === 'number'
       ? `优先级分 ${item.priorityScore}` +

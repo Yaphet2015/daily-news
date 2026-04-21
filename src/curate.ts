@@ -9,6 +9,7 @@ import type { CollectedItem, CuratedItem, MediaAsset, NewsCategory, RankedItem, 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT_PATH = join(__dirname, '..', 'prompts', 'curator.md');
 const DEFAULT_READER_MODEL = 'gpt-4o-mini';
+const FORCED_ROUNDUP_MODEL = 'gpt-4o-mini';
 
 interface LlmCuratedItem {
   id: string;
@@ -25,6 +26,7 @@ interface CurateResponse {
 }
 
 type ReaderFn = (item: CollectedItem) => Promise<ReaderBrief>;
+type ForcedRoundupGenerator = (items: CollectedItem[]) => Promise<CurateResponse>;
 const VALID_CATEGORIES: NewsCategory[] = ['Product', 'Tutorial', 'Opinions/Thoughts'];
 const CURATED_ITEM_SOFT_FLOOR = 40;
 
@@ -122,6 +124,10 @@ function formatReaderBrief(brief: ReaderBrief): string {
     formatList('Signals', brief.signals),
     formatList('Caveats', brief.caveats),
   ].join('\n');
+}
+
+function isSubstackRoundupEntry(item: CollectedItem): boolean {
+  return item.source === 'substack' && item.kind === 'substack_roundup_entry';
 }
 
 async function generateJsonObject<T>(
@@ -258,7 +264,7 @@ export async function attachReaderBriefs(
     if (i >= items.length) return;
     const item = items[i];
     results[i] =
-      item.source === 'substack'
+      item.source === 'substack' && item.kind !== 'substack_roundup_entry'
         ? item.readerBrief
           ? item
           : { ...item, readerBrief: await reader(item) }
@@ -303,7 +309,8 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
         `Item ID: ${item.id}`,
         `Author: @${item.author.username ?? item.author.name} (${item.author.name})`,
         `Time: ${item.publishedAt}`,
-        `Content: ${item.text}`,
+        item.selfThread ? `Thread Parts: ${item.selfThread.partCount}` : null,
+        item.selfThread ? `Full Thread Content: ${item.selfThread.combinedText}` : `Content: ${item.text}`,
         `Primary Source URL: ${item.url}`,
         `Original Post URL: ${item.originUrl ?? item.url}`,
         item.sourceLabel ? `Primary Source: ${item.sourceLabel}` : null,
@@ -321,6 +328,23 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
         .filter((line): line is string => Boolean(line))
         .join('\n');
     })
+    .join('\n\n---\n\n');
+}
+
+function buildForcedRoundupPayload(items: CollectedItem[]): string {
+  return items
+    .map((item, index) =>
+      [
+        `[${index + 1}] Source: substack_roundup_entry`,
+        `Item ID: ${item.id}`,
+        `Publication: ${item.publication?.name ?? 'Unknown publication'}`,
+        `Section: ${item.sectionLabel ?? 'Unknown section'}`,
+        `Title Hint: ${item.title ?? 'Untitled'}`,
+        `Bullet Text: ${item.text}`,
+        `External URL: ${item.url}`,
+        `Newsletter URL: ${item.originUrl ?? 'None'}`,
+      ].join('\n'),
+    )
     .join('\n\n---\n\n');
 }
 
@@ -363,7 +387,11 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
     }
 
     if (sourceItem.source === 'twitter' && sourceItem.sourceResolution?.decision === 'keep_origin') {
-      curatedItem.originText = sourceItem.text;
+      curatedItem.originText = sourceItem.selfThread?.combinedText ?? sourceItem.text;
+    }
+
+    if (sourceItem.selfThread) {
+      curatedItem.threadPartCount = sourceItem.selfThread.partCount;
     }
 
     return [curatedItem];
@@ -389,6 +417,52 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
   return Array.from(byUrl.values());
 }
 
+async function generateForcedRoundupResponse(items: CollectedItem[]): Promise<CurateResponse> {
+  const model = process.env.OPENAI_API_KEY
+    ? process.env.SUBSTACK_READER_MODEL ?? FORCED_ROUNDUP_MODEL
+    : process.env.AI_MODEL ?? FORCED_ROUNDUP_MODEL;
+
+  const response = await generateJsonObject<CurateResponse>(
+    'You are a technology news editor. Return strict JSON only. For every input roundup entry, produce one Chinese digest item with id, title, summary, url, author, category, and editorialReason. Do not drop any item.',
+    `请将以下 roundup 子条目逐条整理成中文资讯，每条输入都必须返回一条输出：\n\n${buildForcedRoundupPayload(items)}`,
+    model,
+  );
+
+  return response;
+}
+
+export async function enrichForcedRoundupItems(
+  items: CollectedItem[],
+  generator: ForcedRoundupGenerator = generateForcedRoundupResponse,
+): Promise<CuratedItem[]> {
+  if (items.length === 0) return [];
+
+  const response = await generator(items);
+  return enrichCuratedItems(parseCurateResponse(JSON.stringify(response)), items);
+}
+
+export function mergeCuratedItems(primary: CuratedItem[], forced: CuratedItem[]): CuratedItem[] {
+  const idsFromPrimary = new Set(primary.map((item) => item.id));
+  const urlsFromPrimary = new Set(primary.map((item) => normalizeUrl(item.url)));
+  const combined = [
+    ...primary,
+    ...forced.filter((item) => !idsFromPrimary.has(item.id) && !urlsFromPrimary.has(normalizeUrl(item.url))),
+  ];
+
+  const seenIds = new Set<string>();
+  const seenUrls = new Set<string>();
+
+  return combined
+    .filter((item) => {
+      const urlKey = normalizeUrl(item.url);
+      if (seenIds.has(item.id) || seenUrls.has(urlKey)) return false;
+      seenIds.add(item.id);
+      seenUrls.add(urlKey);
+      return true;
+    })
+    .sort((a, b) => (b.priorityScore ?? Number.NEGATIVE_INFINITY) - (a.priorityScore ?? Number.NEGATIVE_INFINITY));
+}
+
 async function curateWithModel(systemPrompt: string, userContent: string): Promise<LlmCuratedItem[]> {
   const model = process.env.OPENAI_API_KEY
     ? process.env.OPENAI_MODEL ?? 'gpt-4o'
@@ -404,20 +478,28 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
     return [];
   }
 
-  const systemPrompt = await readFile(PROMPT_PATH, 'utf-8');
-  const enrichedItems = items;
-  const userContent =
-    `以下是从多个信息源采集的 ${enrichedItems.length} 条内容，请按要求筛选整理：\n\n` +
-    buildCollectedItemsPayload(enrichedItems);
+  const normalItems = items.filter((item) => !isSubstackRoundupEntry(item) || !item.forceSelect);
+  const forcedRoundupItems = items.filter((item) => isSubstackRoundupEntry(item) && item.forceSelect);
 
-  console.log('[curate] 预处理 Substack 文章并调用主整理模型...');
-  const llmItems = await curateWithModel(systemPrompt, userContent);
-  const curatedItems = enrichCuratedItems(llmItems, enrichedItems);
-  if (curatedItems.length < llmItems.length) {
-    console.warn(`[curate] 已丢弃 ${llmItems.length - curatedItems.length} 条重复或无效的 AI 输出条目`);
+  let curatedItems: CuratedItem[] = [];
+  if (normalItems.length > 0) {
+    const systemPrompt = await readFile(PROMPT_PATH, 'utf-8');
+    const userContent =
+      `以下是从多个信息源采集的 ${normalItems.length} 条内容，请按要求筛选整理：\n\n` +
+      buildCollectedItemsPayload(normalItems);
+
+    console.log('[curate] 预处理 Substack 文章并调用主整理模型...');
+    const llmItems = await curateWithModel(systemPrompt, userContent);
+    curatedItems = enrichCuratedItems(llmItems, normalItems);
+    if (curatedItems.length < llmItems.length) {
+      console.warn(`[curate] 已丢弃 ${llmItems.length - curatedItems.length} 条重复或无效的 AI 输出条目`);
+    }
   }
-  warnOnUnderfilledCuratedItems(curatedItems.length);
 
-  console.log(`[curate] AI 整理完成，共 ${curatedItems.length} 条资讯`);
-  return curatedItems;
+  const forcedCuratedItems = await enrichForcedRoundupItems(forcedRoundupItems);
+  const merged = mergeCuratedItems(curatedItems, forcedCuratedItems);
+  warnOnUnderfilledCuratedItems(merged.length);
+
+  console.log(`[curate] AI 整理完成，共 ${merged.length} 条资讯`);
+  return merged;
 }

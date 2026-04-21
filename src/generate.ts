@@ -84,6 +84,19 @@ function advancePublishedState(state: RunState, sources: string[], collectedAt: 
   return nextState;
 }
 
+function mergeForcedSelectItems(candidateItems: CollectedItem[], rankedItems: CollectedItem[]): CollectedItem[] {
+  const merged = [...candidateItems];
+  const seen = new Set(candidateItems.map((item) => item.id));
+
+  for (const item of rankedItems) {
+    if (!item.forceSelect || seen.has(item.id)) continue;
+    merged.push(item);
+    seen.add(item.id);
+  }
+
+  return merged;
+}
+
 export async function runGenerate(overrides: Partial<GenerateDeps> = {}): Promise<void> {
   const deps = { ...createGenerateDeps(), ...overrides };
 
@@ -123,7 +136,8 @@ export async function runGenerate(overrides: Partial<GenerateDeps> = {}): Promis
   const enrichedCollectedItems = await deps.attachReaderBriefs(snapshot.items);
   const rankedItems = deps.rankItems(enrichedCollectedItems);
   const candidateItems = deps.selectCandidatePool(rankedItems);
-  const curatedItems = await deps.curate(candidateItems);
+  const curatedInputItems = mergeForcedSelectItems(candidateItems, rankedItems);
+  const curatedItems = await deps.curate(curatedInputItems);
   if (curatedItems.length === 0) {
     deps.log('AI 未整理出任何资讯，本次运行结束。');
     return;

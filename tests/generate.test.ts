@@ -208,3 +208,116 @@ test('runGenerate discards an old pending draft before collecting a fresh snapsh
     'clearDraft',
   ]);
 });
+
+test('runGenerate always passes forced roundup entries into curate even when the normal candidate pool excludes them', async () => {
+  const curateInputs: string[][] = [];
+
+  await runGenerate({
+    readDraft: async () => null,
+    collect: async () =>
+      createSnapshot({
+        enabledSources: ['twitter', 'substack'],
+        items: [
+          {
+            id: 'tw-1',
+            source: 'twitter',
+            text: 'tweet',
+            publishedAt: '2026-03-15T00:00:00Z',
+            url: 'https://x.com/alice/status/1',
+            author: { name: 'Alice', username: 'alice' },
+            media: [],
+            priorityScore: 80,
+            editorialScore: 80,
+            engagementScore: 0,
+            decisionReasons: [],
+            scoreBreakdown: {
+              substance: 20,
+              evidence: 10,
+              sourceSignal: 5,
+              xArticleBonus: 0,
+              freshness: 10,
+              novelty: 15,
+              actionability: 0,
+              penalties: 0,
+            },
+          },
+          {
+            id: 'ss-roundup-1',
+            source: 'substack',
+            kind: 'substack_roundup_entry',
+            title: 'Perplexity launched Labs',
+            text: 'A useful roundup entry',
+            sectionLabel: 'News worth knowing',
+            parentItemId: 'substack-parent-1',
+            forceSelect: true,
+            originUrl: 'https://www.bensbites.com/p/post',
+            publishedAt: '2026-03-15T00:00:00Z',
+            url: 'https://example.com/perplexity-labs',
+            author: { name: "Ben's Bites" },
+            publication: { name: "Ben's Bites", handle: 'bensbites', url: 'https://www.bensbites.com' },
+            media: [],
+            priorityScore: 5,
+            editorialScore: 5,
+            engagementScore: 0,
+            decisionReasons: [],
+            scoreBreakdown: {
+              substance: 5,
+              evidence: 5,
+              sourceSignal: 5,
+              xArticleBonus: 0,
+              freshness: 10,
+              novelty: 15,
+              actionability: 0,
+              penalties: 0,
+            },
+          },
+        ] as unknown as CollectionSnapshot['items'],
+      }),
+    writeDraft: async () => {},
+    clearDraft: async () => {},
+    readState: async () => ({
+      sources: {
+        twitter: { lastPublishedTime: 100 },
+        substack: { lastPublishedTime: 0 },
+      },
+    }),
+    writeState: async () => {},
+    attachReaderBriefs: async (items) => items,
+    rankItems: (items) => items as never,
+    selectCandidatePool: (items) => items.filter((item) => item.id === 'tw-1') as never,
+    curate: async (items) => {
+      curateInputs.push(items.map((item) => item.id));
+      return [
+        {
+          id: 'tw-1',
+          title: 'Launch',
+          summary: 'Summary',
+          url: 'https://x.com/alice/status/1',
+          author: 'Alice',
+          attribution: '@alice',
+          source: 'twitter',
+          category: 'Product',
+          media: [],
+        },
+        {
+          id: 'ss-roundup-1',
+          title: 'Perplexity 推出 Labs',
+          summary: 'Summary',
+          url: 'https://example.com/perplexity-labs',
+          originUrl: 'https://www.bensbites.com/p/post',
+          author: "Ben's Bites",
+          attribution: "Ben's Bites · News worth knowing",
+          source: 'substack',
+          category: 'Product',
+          media: [],
+        },
+      ];
+    },
+    select: async (items) => items,
+    format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+    publish: async () => {},
+    log: () => {},
+  });
+
+  assert.deepEqual(curateInputs, [['tw-1', 'ss-roundup-1']]);
+});

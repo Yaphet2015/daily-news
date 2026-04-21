@@ -177,6 +177,61 @@ test('attachReaderBriefs reuses an existing reader brief instead of reading the 
   assert.deepEqual(items[0].readerBrief, existingBrief);
 });
 
+test('attachReaderBriefs skips Substack roundup child items', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).attachReaderBriefs, 'function');
+
+  const attachReaderBriefs = (curateModule as Record<string, Function>).attachReaderBriefs;
+  const seen: string[] = [];
+
+  const items = await attachReaderBriefs(
+    [
+      {
+        id: 'ss-parent',
+        source: 'substack',
+        kind: 'substack_post',
+        title: 'Article',
+        subtitle: 'Subtitle',
+        text: 'excerpt',
+        body: 'Full article body',
+        author: { name: 'Pub' },
+        publication: { name: 'Pub', handle: 'pub', url: 'https://pub.substack.com' },
+        publishedAt: '2026-03-15T01:00:00Z',
+        url: 'https://pub.substack.com/p/article',
+        media: [],
+      },
+      {
+        id: 'ss-child',
+        source: 'substack',
+        kind: 'substack_roundup_entry',
+        title: 'Tool',
+        sectionLabel: 'Dev dish',
+        parentItemId: 'ss-parent',
+        text: 'A useful developer tool.',
+        author: { name: "Ben's Bites" },
+        publication: { name: "Ben's Bites", handle: 'bensbites', url: 'https://www.bensbites.com' },
+        publishedAt: '2026-03-15T01:00:00Z',
+        url: 'https://example.com/tool',
+        originUrl: 'https://www.bensbites.com/p/article',
+        media: [],
+      },
+    ],
+    async (item: { id: string }) => {
+      seen.push(item.id);
+      return {
+        summary: 'summary',
+        keyPoints: ['point'],
+        claims: ['claim'],
+        whyItMatters: 'why',
+        signals: ['signal'],
+        caveats: ['caveat'],
+      };
+    },
+  );
+
+  assert.deepEqual(seen, ['ss-parent']);
+  assert.equal(items[1].readerBrief, undefined);
+});
+
 test('parseReaderBrief rejects malformed JSON payloads', () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
 
@@ -285,6 +340,50 @@ test('buildCollectedItemsPayload uses reader brief for Substack items instead of
   assert.match(payload, /Publication: Example Publication/);
   assert.match(payload, /Reader summary/);
   assert.doesNotMatch(payload, /THIS SHOULD NOT APPEAR/);
+});
+
+test('buildCollectedItemsPayload includes full self-thread content for Twitter thread items', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).buildCollectedItemsPayload, 'function');
+
+  const buildCollectedItemsPayload = (curateModule as Record<string, Function>).buildCollectedItemsPayload;
+  const payload = buildCollectedItemsPayload([
+    {
+      id: 'thread-1',
+      source: 'twitter',
+      text: '[1/2] 1/2\nRoot\n\n[2/2] 2/2\nFollow-up',
+      author: { name: 'Alice', username: 'alice' },
+      publishedAt: '2026-04-21T00:00:00Z',
+      url: 'https://x.com/alice/status/thread-1',
+      originUrl: 'https://x.com/alice/status/thread-1',
+      media: [],
+      selfThread: {
+        partIds: ['thread-1', 'thread-2'],
+        partCount: 2,
+        combinedText: '[1/2] 1/2\nRoot\n\n[2/2] 2/2\nFollow-up',
+        parts: [
+          {
+            id: 'thread-1',
+            originUrl: 'https://x.com/alice/status/thread-1',
+            text: '1/2\nRoot',
+            publishedAt: '2026-04-21T00:00:00Z',
+            media: [],
+          },
+          {
+            id: 'thread-2',
+            originUrl: 'https://x.com/alice/status/thread-2',
+            text: '2/2\nFollow-up',
+            publishedAt: '2026-04-21T00:00:05Z',
+            media: [],
+          },
+        ],
+      },
+      sourceResolution: { decision: 'keep_origin', reason: 'numbered_self_thread' },
+    },
+  ]);
+
+  assert.match(payload, /Thread Parts: 2/);
+  assert.match(payload, /Full Thread Content:\s*\[1\/2\] 1\/2/);
+  assert.doesNotMatch(payload, /Primary Source URL: https:\/\/lessons\.md/);
 });
 
 test('enrichCuratedItems restores source metadata, attribution, and media by matching id', () => {
@@ -553,6 +652,195 @@ test('enrichCuratedItems dedupes repeated model rows by id and canonical url', (
 
   assert.deepEqual(enriched.map((item) => item.id), ['higher-score']);
   assert.equal(enriched[0]?.title, 'Higher');
+});
+
+test('enrichCuratedItems preserves combined self-thread origin text and thread metadata', () => {
+  const items = [
+    {
+      id: 'thread-1',
+      title: 'Thread title',
+      summary: 'Thread summary',
+      url: 'https://x.com/alice/status/thread-1',
+      author: 'ignored',
+      category: 'Product',
+    },
+  ];
+
+  const collectedItems = [
+    {
+      id: 'thread-1',
+      source: 'twitter',
+      text: '[1/2] 1/2\nRoot\n\n[2/2] 2/2\nFollow-up',
+      originUrl: 'https://x.com/alice/status/thread-1',
+      author: { name: 'Alice', username: 'alice' },
+      publishedAt: '2026-04-21T00:00:00Z',
+      url: 'https://x.com/alice/status/thread-1',
+      media: [],
+      selfThread: {
+        partIds: ['thread-1', 'thread-2'],
+        partCount: 2,
+        combinedText: '[1/2] 1/2\nRoot\n\n[2/2] 2/2\nFollow-up',
+        parts: [
+          {
+            id: 'thread-1',
+            originUrl: 'https://x.com/alice/status/thread-1',
+            text: '1/2\nRoot',
+            publishedAt: '2026-04-21T00:00:00Z',
+            media: [],
+          },
+          {
+            id: 'thread-2',
+            originUrl: 'https://x.com/alice/status/thread-2',
+            text: '2/2\nFollow-up',
+            publishedAt: '2026-04-21T00:00:05Z',
+            media: [],
+          },
+        ],
+      },
+      sourceResolution: { decision: 'keep_origin', reason: 'numbered_self_thread' },
+    },
+  ];
+
+  assert.deepEqual(curateModule.enrichCuratedItems(items as never[], collectedItems as never[]), [
+    {
+      id: 'thread-1',
+      title: 'Thread title',
+      summary: 'Thread summary',
+      url: 'https://x.com/alice/status/thread-1',
+      originUrl: 'https://x.com/alice/status/thread-1',
+      author: 'alice',
+      category: 'Product',
+      source: 'twitter',
+      attribution: '@alice',
+      media: [],
+      originText: '[1/2] 1/2\nRoot\n\n[2/2] 2/2\nFollow-up',
+      sourceResolution: { decision: 'keep_origin', reason: 'numbered_self_thread' },
+      threadPartCount: 2,
+    },
+  ]);
+});
+
+test('enrichForcedRoundupItems returns one curated row for every forced roundup entry', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).enrichForcedRoundupItems, 'function');
+
+  const enrichForcedRoundupItems = (curateModule as Record<string, Function>).enrichForcedRoundupItems;
+
+  const items = await enrichForcedRoundupItems(
+    [
+      {
+        id: 'roundup-1',
+        source: 'substack',
+        kind: 'substack_roundup_entry',
+        title: 'Perplexity launched Labs',
+        text: 'A new mode that combines deep research, codegen, and image generation.',
+        sectionLabel: 'News worth knowing',
+        forceSelect: true,
+        originUrl: 'https://www.bensbites.com/p/post',
+        publishedAt: '2026-03-15T01:00:00Z',
+        url: 'https://example.com/perplexity-labs',
+        author: { name: "Ben's Bites" },
+        publication: { name: "Ben's Bites", handle: 'bensbites', url: 'https://www.bensbites.com' },
+        sourceLabel: "Ben's Bites · News worth knowing",
+        media: [],
+      },
+    ],
+    async () => ({
+      items: [
+        {
+          id: 'roundup-1',
+          title: 'Perplexity 推出 Labs 模式',
+          summary: '这是一条中文摘要。',
+          url: 'https://example.com/perplexity-labs',
+          author: "Ben's Bites",
+          category: 'Product',
+          editorialReason: '这条 roundup 提供了可执行的新产品信号。',
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(items, [
+    {
+      id: 'roundup-1',
+      title: 'Perplexity 推出 Labs 模式',
+      summary: '这是一条中文摘要。',
+      url: 'https://example.com/perplexity-labs',
+      originUrl: 'https://www.bensbites.com/p/post',
+      author: "Ben's Bites",
+      attribution: "Ben's Bites · News worth knowing",
+      source: 'substack',
+      category: 'Product',
+      media: [],
+      editorialReason: '这条 roundup 提供了可执行的新产品信号。',
+    },
+  ]);
+});
+
+test('mergeCuratedItems keeps all forced roundup rows and prefers normal curated rows on conflicts', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).mergeCuratedItems, 'function');
+
+  const mergeCuratedItems = (curateModule as Record<string, Function>).mergeCuratedItems;
+  const merged = mergeCuratedItems(
+    [
+      {
+        id: 'normal-1',
+        title: 'Normal item',
+        summary: 'Normal summary',
+        url: 'https://example.com/normal',
+        author: 'alice',
+        attribution: '@alice',
+        source: 'twitter',
+        category: 'Product',
+        media: [],
+        priorityScore: 80,
+      },
+      {
+        id: 'roundup-1',
+        title: 'Preferred normal version',
+        summary: 'Normal summary for roundup',
+        url: 'https://example.com/roundup',
+        author: "Ben's Bites",
+        attribution: "Ben's Bites · News worth knowing",
+        source: 'substack',
+        category: 'Product',
+        media: [],
+        priorityScore: 70,
+      },
+    ],
+    [
+      {
+        id: 'roundup-1',
+        title: 'Forced version',
+        summary: 'Forced summary',
+        url: 'https://example.com/roundup',
+        author: "Ben's Bites",
+        attribution: "Ben's Bites · News worth knowing",
+        source: 'substack',
+        category: 'Product',
+        media: [],
+      },
+      {
+        id: 'roundup-2',
+        title: 'Forced only',
+        summary: 'Forced only summary',
+        url: 'https://example.com/forced-only',
+        author: "Ben's Bites",
+        attribution: "Ben's Bites · Dev dish",
+        source: 'substack',
+        category: 'Tutorial',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(
+    merged.map((item: { id: string; title: string }) => ({ id: item.id, title: item.title })),
+    [
+      { id: 'normal-1', title: 'Normal item' },
+      { id: 'roundup-1', title: 'Preferred normal version' },
+      { id: 'roundup-2', title: 'Forced only' },
+    ],
+  );
 });
 
 test('curator prompt requires materially longer investigative summaries, editorial reasons, and fixed categories', () => {

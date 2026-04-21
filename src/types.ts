@@ -1,5 +1,7 @@
 export type SourceName = 'twitter' | 'substack';
 export type NewsCategory = 'Product' | 'Tutorial' | 'Opinions/Thoughts';
+export type RoundupMode = 'bullet_links';
+export type CollectedItemKind = 'substack_post' | 'substack_roundup_entry';
 
 export interface MediaAsset {
   type: string;
@@ -26,6 +28,7 @@ export interface PublicationRef {
   name: string;
   handle?: string;
   url?: string;
+  roundupMode?: RoundupMode;
 }
 
 export interface ReplyContext {
@@ -35,6 +38,21 @@ export interface ReplyContext {
   publishedAt?: string;
   url?: string;
   outboundLinks: string[];
+}
+
+export interface SelfThreadPart {
+  id: string;
+  originUrl?: string;
+  text: string;
+  publishedAt: string;
+  media: MediaAsset[];
+}
+
+export interface SelfThread {
+  partIds: string[];
+  partCount: number;
+  combinedText: string;
+  parts: SelfThreadPart[];
 }
 
 export interface LinkedSource {
@@ -54,8 +72,11 @@ export interface SourceResolution {
 export interface CollectedItem {
   id: string;
   source: SourceName;
+  kind?: CollectedItemKind;
   url: string;
   originUrl?: string;
+  parentItemId?: string;
+  sectionLabel?: string;
   publishedAt: string;
   author: CollectedAuthor;
   publication?: PublicationRef;
@@ -64,6 +85,7 @@ export interface CollectedItem {
   sourceLabel?: string;
   text: string;
   body?: string;
+  htmlBody?: string;
   media: MediaAsset[];
   outboundLinks?: string[];
   embeddedLinkedSource?: LinkedSource;
@@ -71,11 +93,13 @@ export interface CollectedItem {
   replyContext?: ReplyContext[];
   linkedSource?: LinkedSource;
   sourceResolution?: SourceResolution;
+  selfThread?: SelfThread;
   readerBrief?: ReaderBrief;
   likeCount?: number;
   replyCount?: number;
   repostCount?: number;
   quoteCount?: number;
+  forceSelect?: boolean;
 }
 
 export interface ScoreBreakdown {
@@ -116,6 +140,7 @@ export interface CuratedItem {
   decisionReasons?: string[];
   editorialReason?: string;
   originText?: string;
+  threadPartCount?: number;
   sourceResolution?: SourceResolution;
 }
 

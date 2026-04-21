@@ -6,7 +6,10 @@ import type {
   LinkedSource,
   MediaAsset,
   ReplyContext,
+  RoundupMode,
   RunState,
+  SelfThread,
+  SelfThreadPart,
   SourceName,
   SourceResolution,
 } from './types.js';
@@ -19,6 +22,7 @@ const MAX_TWEETS = 500;
 const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
+const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
 
 interface TwitterCliTweet {
   id: string;
@@ -123,6 +127,7 @@ interface SubstackPublicationLike {
   slug?: string;
   name: string;
   url?: string;
+  roundupMode?: RoundupMode;
   posts(options?: { limit?: number }): AsyncIterable<SubstackPreviewLike>;
 }
 
@@ -135,9 +140,9 @@ interface SubstackPostLike {
   title: string;
   subtitle?: string | null;
   body?: string;
+  htmlBody?: string;
   truncatedBody?: string;
   markdown?: string;
-  htmlBody?: string;
   publishedAt: Date | string;
   url: string;
   coverImage?: string | null;
@@ -172,9 +177,29 @@ interface CollectSubstackItemsOptions {
 }
 
 interface PublicSubstackFeed {
-  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>;
+  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & {
+    roundupMode?: RoundupMode;
+  };
   posts: SubstackPostLike[];
 }
+
+interface ConfiguredSubstackPublication {
+  name: string;
+  handle: string;
+  slug: string;
+  url: string;
+  roundupMode?: RoundupMode;
+}
+
+const CONFIGURED_SUBSTACK_PUBLICATIONS: ConfiguredSubstackPublication[] = [
+  {
+    name: "Ben's Bites",
+    handle: 'bensbites',
+    slug: 'bensbites',
+    url: 'https://www.bensbites.com',
+    roundupMode: 'bullet_links',
+  },
+];
 
 function buildTweetUrl(username: string, id: string): string {
   return `https://x.com/${username}/status/${id}`;
@@ -425,6 +450,127 @@ function filterSinceTime(items: CollectedItem[], sinceTime: number): CollectedIt
   return items.filter((item) => toUnixSeconds(item.publishedAt) > sinceTime);
 }
 
+function parseThreadPrefix(text: string): { part: number; total: number } | null {
+  const match = text.match(/^\s*(\d{1,3})\s*\/\s*(\d{1,3})\b/);
+  if (!match) return null;
+
+  const part = Number.parseInt(match[1] ?? '', 10);
+  const total = Number.parseInt(match[2] ?? '', 10);
+  if (!Number.isFinite(part) || !Number.isFinite(total) || part < 1 || total < 2 || part > total) {
+    return null;
+  }
+
+  return { part, total };
+}
+
+function compareThreadOrder(a: CollectedItem, b: CollectedItem): number {
+  const timeDiff = Date.parse(a.publishedAt) - Date.parse(b.publishedAt);
+  if (timeDiff !== 0) return timeDiff;
+  return a.id.localeCompare(b.id);
+}
+
+function buildSelfThreadPart(item: CollectedItem): SelfThreadPart {
+  return {
+    id: item.id,
+    originUrl: item.originUrl,
+    text: item.text,
+    publishedAt: item.publishedAt,
+    media: item.media,
+  };
+}
+
+function buildCombinedThreadText(
+  parts: Array<{ item: CollectedItem; prefix: { part: number; total: number } }>,
+): string {
+  return parts
+    .map(({ item, prefix }) => `[${prefix.part}/${prefix.total}] ${item.text.trim()}`)
+    .join('\n\n');
+}
+
+function buildCollapsedThreadItem(
+  root: CollectedItem,
+  parts: Array<{ item: CollectedItem; prefix: { part: number; total: number } }>,
+): CollectedItem {
+  const selfThread: SelfThread = {
+    partIds: parts.map(({ item }) => item.id),
+    partCount: parts.length,
+    combinedText: buildCombinedThreadText(parts),
+    parts: parts.map(({ item }) => buildSelfThreadPart(item)),
+  };
+
+  return {
+    ...root,
+    text: selfThread.combinedText,
+    url: root.originUrl ?? root.url,
+    originUrl: root.originUrl ?? root.url,
+    media: parts.flatMap(({ item }) => item.media),
+    sourceResolution: { decision: 'keep_origin', reason: 'numbered_self_thread' },
+    selfThread,
+  };
+}
+
+export function collapseNumberedSelfThreads(items: CollectedItem[]): CollectedItem[] {
+  const itemsByAuthor = new Map<string, CollectedItem[]>();
+  for (const item of items) {
+    if (item.source !== 'twitter') continue;
+    const username = item.author.username?.trim().toLowerCase();
+    if (!username) continue;
+    const authorItems = itemsByAuthor.get(username) ?? [];
+    authorItems.push(item);
+    itemsByAuthor.set(username, authorItems);
+  }
+
+  const rootReplacements = new Map<string, CollectedItem>();
+  const omittedIds = new Set<string>();
+
+  for (const authorItems of itemsByAuthor.values()) {
+    const sorted = [...authorItems].sort(compareThreadOrder);
+
+    for (let index = 0; index < sorted.length; index += 1) {
+      const root = sorted[index];
+      if (!root || rootReplacements.has(root.id) || omittedIds.has(root.id)) continue;
+
+      const rootPrefix = parseThreadPrefix(root.text);
+      if (!rootPrefix || rootPrefix.part !== 1) continue;
+
+      const startedAt = toUnixSeconds(root.publishedAt);
+      const candidateParts: Array<{ item: CollectedItem; prefix: { part: number; total: number } }> = [
+        { item: root, prefix: rootPrefix },
+      ];
+      let nextPart = 2;
+
+      for (let probe = index + 1; probe < sorted.length && nextPart <= rootPrefix.total; probe += 1) {
+        const candidate = sorted[probe];
+        if (!candidate || rootReplacements.has(candidate.id) || omittedIds.has(candidate.id)) continue;
+        if (toUnixSeconds(candidate.publishedAt) - startedAt > SELF_THREAD_MAX_SPAN_SECONDS) break;
+
+        const candidatePrefix = parseThreadPrefix(candidate.text);
+        if (!candidatePrefix) continue;
+        if (candidatePrefix.total !== rootPrefix.total) continue;
+        if (candidatePrefix.part !== nextPart) continue;
+
+        candidateParts.push({ item: candidate, prefix: candidatePrefix });
+        nextPart += 1;
+      }
+
+      if (candidateParts.length !== rootPrefix.total || candidateParts.length < 2) continue;
+
+      rootReplacements.set(root.id, buildCollapsedThreadItem(root, candidateParts));
+      for (const { item } of candidateParts.slice(1)) {
+        omittedIds.add(item.id);
+      }
+    }
+  }
+
+  const result: CollectedItem[] = [];
+  for (const item of items) {
+    if (omittedIds.has(item.id)) continue;
+    result.push(rootReplacements.get(item.id) ?? item);
+  }
+
+  return result;
+}
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -582,6 +728,34 @@ function parsePublicationUrl(publicationUrl: string): URL {
   }
 }
 
+function normalizePublicationUrl(publicationUrl: string): string {
+  const parsed = parsePublicationUrl(publicationUrl);
+  parsed.hash = '';
+  parsed.search = '';
+  const normalized = parsed.toString();
+  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+}
+
+export function mergeConfiguredSubstackPublications(
+  publications: Array<Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>>,
+): Array<Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & { roundupMode?: RoundupMode }> {
+  const byUrl = new Map<string, Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & {
+    roundupMode?: RoundupMode;
+  }>();
+
+  for (const publication of CONFIGURED_SUBSTACK_PUBLICATIONS) {
+    byUrl.set(normalizePublicationUrl(publication.url), { ...publication });
+  }
+
+  for (const publication of publications) {
+    const key = normalizePublicationUrl(publication.url);
+    const configured = byUrl.get(key);
+    byUrl.set(key, configured ? { ...publication, roundupMode: configured.roundupMode } : publication);
+  }
+
+  return Array.from(byUrl.values());
+}
+
 function deriveSubstackProfileHandle(publicationUrl: string): string {
   const url = parsePublicationUrl(publicationUrl);
   const match = url.hostname.match(/^([^.]+)\.substack\.com$/i);
@@ -666,7 +840,8 @@ export function parseSubstackFeed(xml: string): PublicSubstackFeed {
       if (!url || !title) return [];
 
       const description = cleanXmlText(extractXmlTag(block, 'description'));
-      const content = stripHtml(cleanXmlText(extractXmlTag(block, 'content:encoded')));
+      const htmlBody = cleanXmlText(extractXmlTag(block, 'content:encoded'));
+      const content = stripHtml(htmlBody);
       const publishedAt = new Date(cleanXmlText(extractXmlTag(block, 'pubDate'))).toISOString();
       const coverImage = extractXmlAttribute(block, 'enclosure', 'url');
 
@@ -676,6 +851,7 @@ export function parseSubstackFeed(xml: string): PublicSubstackFeed {
           title,
           subtitle: description || null,
           body: content,
+          htmlBody: htmlBody || undefined,
           truncatedBody: description || content,
           publishedAt,
           url,
@@ -684,6 +860,157 @@ export function parseSubstackFeed(xml: string): PublicSubstackFeed {
       ];
     }),
   };
+}
+
+function normalizeRoundupSectionLabel(value: string): string {
+  return stripHtml(value)
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function slugifyRoundupSection(value: string): string {
+  return normalizeRoundupSectionLabel(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function extractRoundupAnchors(html: string): Array<{ href: string; text: string }> {
+  return Array.from(html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)).flatMap((match) => {
+    const href = match[1]?.trim();
+    const text = stripHtml(match[2] ?? '').trim();
+    return href ? [{ href, text }] : [];
+  });
+}
+
+function isSkippableRoundupSection(sectionLabel: string): boolean {
+  const normalized = sectionLabel.trim().toLowerCase();
+  return [
+    'sponsor',
+    'sponsored',
+    'ready for more',
+    'advertise',
+    'partner',
+    'job board',
+  ].some((keyword) => normalized.includes(keyword));
+}
+
+function isInternalRoundupUrl(raw: string, publicationUrl: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return true;
+
+    const publicationHost = new URL(publicationUrl).hostname.replace(/^www\./i, '').toLowerCase();
+    const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+    if (host === publicationHost) return true;
+
+    const path = `${url.pathname}${url.search}`.toLowerCase();
+    if (/(?:^|\/)(chat|subscribe|podcast|advertise|media-kit)(?:\/|$)/.test(path)) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function resolveRoundupEntryTitle(
+  anchors: Array<{ href: string; text: string }>,
+  bulletText: string,
+  publicationUrl: string,
+): string {
+  const externalAnchor = anchors.find((anchor) => anchor.text && !isInternalRoundupUrl(anchor.href, publicationUrl));
+  if (externalAnchor?.text) return externalAnchor.text;
+
+  const leading = bulletText.split(/\s+-\s+|:\s+/)[0]?.trim();
+  return leading && leading.length > 0 ? leading : bulletText.slice(0, 120).trim();
+}
+
+export function extractSubstackRoundupEntries(parent: CollectedItem): CollectedItem[] {
+  if (
+    parent.source !== 'substack' ||
+    parent.kind !== 'substack_post' ||
+    parent.publication?.roundupMode !== 'bullet_links'
+  ) {
+    return [];
+  }
+
+  const html = parent.htmlBody?.trim();
+  if (!html) return [];
+
+  const sections = Array.from(
+    html.matchAll(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>([\s\S]*?)(?=<h[1-6]\b[^>]*>|$)/gi),
+  );
+  const items: CollectedItem[] = [];
+
+  for (const [, headingHtml, sectionHtml] of sections) {
+    const sectionLabel = normalizeRoundupSectionLabel(headingHtml);
+    if (!sectionLabel || isSkippableRoundupSection(sectionLabel)) continue;
+
+    const listItems = Array.from(sectionHtml.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi));
+    if (listItems.length === 0) continue;
+
+    let sectionIndex = 0;
+    for (const [, listItemHtml] of listItems) {
+      const anchors = extractRoundupAnchors(listItemHtml);
+      const externalAnchor = anchors.find((anchor) => !isInternalRoundupUrl(anchor.href, parent.publication?.url ?? parent.url));
+      if (!externalAnchor?.href) continue;
+
+      const bulletText = stripHtml(listItemHtml).replace(/\s+/g, ' ').trim();
+      if (!bulletText) continue;
+
+      sectionIndex += 1;
+      items.push({
+        id: `${parent.id}-roundup-${slugifyRoundupSection(sectionLabel)}-${sectionIndex}`,
+        source: 'substack',
+        kind: 'substack_roundup_entry',
+        title: resolveRoundupEntryTitle(anchors, bulletText, parent.publication?.url ?? parent.url),
+        text: bulletText,
+        url: externalAnchor.href,
+        originUrl: parent.url,
+        parentItemId: parent.id,
+        sectionLabel,
+        publishedAt: parent.publishedAt,
+        author: { ...parent.author },
+        publication: parent.publication ? { ...parent.publication } : undefined,
+        sourceLabel: `${parent.publication?.name ?? parent.author.name} · ${sectionLabel}`,
+        media: [],
+        forceSelect: true,
+      });
+    }
+  }
+
+  return items;
+}
+
+async function expandSubstackRoundupItems(
+  items: CollectedItem[],
+  fetchPostHtml: (url: string) => Promise<string> = fetchSubstackText,
+): Promise<CollectedItem[]> {
+  const expanded: CollectedItem[] = [];
+
+  for (const item of items) {
+    expanded.push(item);
+    if (item.source !== 'substack' || item.kind !== 'substack_post' || item.publication?.roundupMode !== 'bullet_links') {
+      continue;
+    }
+
+    let children = extractSubstackRoundupEntries(item);
+    if (children.length === 0 && !item.htmlBody) {
+      try {
+        const htmlBody = await fetchPostHtml(item.url);
+        children = extractSubstackRoundupEntries({ ...item, htmlBody });
+      } catch (error) {
+        console.warn(`[collect] Ben's Bites roundup fallback 抓取失败 ${item.url}: ${summarizeError(error)}`);
+      }
+    }
+
+    expanded.push(...children);
+  }
+
+  return expanded;
 }
 
 function resolveFullSubstackPost(preview: SubstackPreviewLike | SubstackPostLike): Promise<SubstackPostLike> {
@@ -1414,16 +1741,16 @@ async function fetchQuotedPrimarySource(
 }
 
 async function fetchPublicSubstackPublications(): Promise<
-  Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>[]
+  Array<Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & { roundupMode?: RoundupMode }>
 > {
   const publicationUrl = process.env.SUBSTACK_PUBLICATION_URL;
   if (!publicationUrl) {
-    throw new Error('Substack source 已启用，但缺少 SUBSTACK_PUBLICATION_URL');
+    return mergeConfiguredSubstackPublications([]);
   }
 
   const handle = deriveSubstackProfileHandle(publicationUrl);
   const html = await fetchSubstackText(`https://substack.com/@${handle}`);
-  return parsePublicSubstackSubscriptions(html);
+  return mergeConfiguredSubstackPublications(parsePublicSubstackSubscriptions(html));
 }
 
 function buildPublicationFeedUrl(
@@ -1433,7 +1760,7 @@ function buildPublicationFeedUrl(
 }
 
 async function fetchPublicationFeed(
-  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>,
+  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & { roundupMode?: RoundupMode },
 ): Promise<PublicSubstackFeed> {
   const feedUrl = buildPublicationFeedUrl(publication);
   const xml = await fetchSubstackText(feedUrl);
@@ -1446,13 +1773,14 @@ async function fetchPublicationFeed(
       handle: publication.handle,
       slug: publication.slug,
       url: publication.url,
+      roundupMode: publication.roundupMode,
     },
     posts: parsed.posts,
   };
 }
 
 function warnSubstackFeedFailure(
-  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>,
+  publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & { roundupMode?: RoundupMode },
   error: unknown,
 ): void {
   const proxy = resolveHttpProxy();
@@ -1564,6 +1892,7 @@ export async function resolveTwitterPrimarySource(
   options: ResolveTwitterPrimarySourceOptions = {},
 ): Promise<CollectedItem> {
   if (item.source !== 'twitter') return item;
+  if (item.selfThread) return item;
 
   const fetchLinkedPageImpl = options.fetchLinkedPage ?? fetchLinkedPage;
   const fetchTwitterRepliesImpl = options.fetchTwitterReplies ?? fetchTwitterReplies;
@@ -1762,8 +2091,9 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
   }
 
   const filtered = filterSinceTime(items, sinceTime);
+  const collapsed = collapseNumberedSelfThreads(filtered);
   const sharedShortUrlResolver = createShortUrlResolver();
-  const resolved = await resolveTwitterPrimarySources(filtered, {
+  const resolved = await resolveTwitterPrimarySources(collapsed, {
     resolveTwitterPrimarySource: (item) =>
       resolveTwitterPrimarySource(item, {
         resolveShortUrl: sharedShortUrlResolver,
@@ -1821,7 +2151,7 @@ export function mapTwitterApiTweet(tweet: TwitterApiTweet): CollectedItem {
 
 export function mapSubstackPost(
   post: SubstackPostLike,
-  publication: Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>,
+  publication: Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url' | 'roundupMode'>,
 ): CollectedItem {
   const body = resolveSubstackBody(post);
   const coverImage =
@@ -1832,10 +2162,12 @@ export function mapSubstackPost(
   return {
     id: `substack-${post.id}`,
     source: 'substack',
+    kind: 'substack_post',
     title: post.title,
     subtitle: post.subtitle ?? null,
     text: resolveSubstackText(post, body),
     body,
+    htmlBody: post.htmlBody,
     publishedAt: resolveSubstackDate(post.publishedAt),
     url: post.url,
     author: { name: publication.name },
@@ -1843,6 +2175,7 @@ export function mapSubstackPost(
       name: publication.name,
       handle: publication.handle ?? publication.slug,
       url: publication.url,
+      roundupMode: publication.roundupMode,
     },
     media: coverImage,
   };
@@ -1926,9 +2259,10 @@ export async function collectSubstackItems({
     }
   }
 
-  const sorted = sortNewestFirst(items).slice(0, maxPosts);
-  console.log(`[collect] Substack 完成，共采集 ${sorted.length} 篇文章`);
-  return sorted;
+  const parents = sortNewestFirst(items).slice(0, maxPosts);
+  const expanded = await expandSubstackRoundupItems(parents);
+  console.log(`[collect] Substack 完成，共采集 ${parents.length} 篇文章，展开 ${expanded.length - parents.length} 条 roundup 子项`);
+  return sortNewestFirst(expanded);
 }
 
 export async function collectSources({

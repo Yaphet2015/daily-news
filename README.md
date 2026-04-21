@@ -32,7 +32,7 @@ npm install
 cp .env.example .env
 ```
 
-用编辑器打开 `.env`，按注释填写各项配置。若启用 `substack` 来源，至少需要填写 `SUBSTACK_PUBLICATION_URL`。
+用编辑器打开 `.env`，按注释填写各项配置。若启用 `substack` 来源，建议填写 `SUBSTACK_PUBLICATION_URL` 以读取你公开 follow 的 publications；仓库内显式配置的 pinned publication（如 Ben's Bites）即使未出现在你的 follow 列表里也会照常抓取。
 
 ### 3. 运行
 
@@ -97,11 +97,11 @@ npm run generate
 
 | 变量 | 说明 |
 |------|------|
-| `SUBSTACK_PUBLICATION_URL` | 你的 Substack 发布地址，如 `https://yourname.substack.com`。程序会从对应公开个人页读取你 follow 的 publications |
+| `SUBSTACK_PUBLICATION_URL` | 你的 Substack 发布地址，如 `https://yourname.substack.com`。程序会从对应公开个人页读取你 follow 的 publications；未配置时仍会继续抓取仓库内显式配置的 pinned publications |
 | `SUBSTACK_SOURCE_MAX_POSTS` | 每次最多纳入多少篇新文章，默认 `40` |
 | `SUBSTACK_SOURCE_MAX_POSTS_PER_PUBLICATION` | 每个 publication 每次最多纳入多少篇文章，默认 `2` |
 
-> 说明：当前版本同时支持 Substack 输入与输出。输入会读取你的公开个人页中展示的 followed publications，再抓取这些 publication 的公开 RSS feed。也就是说，这条路径只覆盖公开文章，不依赖 `substack.sid` / `connect.sid` Cookie。公开 RSS 抓取按 publication best-effort 处理；如果单个站点因为坏重定向、TLS 或超时失败，会记录 warning 并跳过该 publication，不会中断整次生成。
+> 说明：当前版本同时支持 Substack 输入与输出。输入会读取你的公开个人页中展示的 followed publications，并与仓库内显式配置的 pinned publications 合并，再抓取这些 publication 的公开 RSS feed。也就是说，这条路径只覆盖公开文章，不依赖 `substack.sid` / `connect.sid` Cookie。公开 RSS 抓取按 publication best-effort 处理；如果单个站点因为坏重定向、TLS 或超时失败，会记录 warning 并跳过该 publication，不会中断整次生成。
 
 ---
 
@@ -129,9 +129,17 @@ output/YYYY-MM-DD-substack.html
 
 ### Substack 输入限制
 
-1. 只会读取你公开个人页里可见的 followed publications
+1. 公开 follow 路径只会读取你公开个人页里可见的 followed publications；另外仓库也可以显式 pin 某些 publication（当前包括 Ben's Bites）
 2. 只会抓取这些 publication 的公开 RSS 内容
 3. 付费、私有、仅订阅者可见的文章不会被这条采集路径纳入
+
+### Ben's Bites roundup 展开
+
+1. `https://www.bensbites.com/` 作为仓库内置的 pinned publication，会独立于 `SUBSTACK_PUBLICATION_URL` 抓取
+2. 系统会保留整篇 Ben's Bites newsletter 作为原始 Substack 条目
+3. 如果文章正文里存在稳定的 `heading + bullet list` roundup 结构，会额外把其中每条 bullet 展开成独立子条目
+4. 展开后的子条目会在 `select` 阶段平铺显示，保留 newsletter 原文链接作为 `originUrl`，并把 bullet 中的外部链接作为最终 `url`
+5. 当前只对仓库显式配置为 roundup 的 publication 启用这套拆分逻辑，不会自动作用于所有 Substack
 
 ---
 
@@ -162,8 +170,9 @@ output/YYYY-MM-DD-substack.html
 - **发布游标 SSOT**：`data/state.json` 只在本地发布阶段成功结束后才推进，记录每个来源最近一次成功发布到本地产物的采集时间；单纯采集成功不会推进这个游标，避免分析失败后丢稿
 - **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
 - **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中
-- **Substack 输入**：通过公开个人页枚举你 follow 的 publications，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
+- **Substack 输入**：通过公开个人页枚举你 follow 的 publications，并与仓库内 pinned publications 合并，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
+- **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，不再因为单篇文章缺少 caveat/signals 而整次中断
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断。主整理模型返回后还会再次校验：只保留 ID 与 source URL 都匹配输入的条目，并按 ID / canonical URL 去掉重复输出，避免模型把同一段 JSON 数组重复返回到人工复选
@@ -182,10 +191,10 @@ output/YYYY-MM-DD-substack.html
 daily-news/
 ├── src/
 │   ├── generate.ts    # 主入口，串联五步 pipeline
-│   ├── collect.ts     # Twitter / Substack 采集、归一化与来源级增量状态
+│   ├── collect.ts     # Twitter / Substack 采集、归一化、pinned publication 与 roundup 展开
 │   ├── rank.ts        # 显式优先级打分、重复惩罚、候选池筛选
 │   ├── ranking-preferences.ts # 仓库内维护的编辑偏好规则（如作者降权）
-│   ├── curate.ts      # Substack 全文预读 + 主整理模型（OpenAI / ai-sdk）
+│   ├── curate.ts      # Substack 全文预读 + 主整理模型 + roundup 强制摘要补全
 │   ├── draft.ts       # pending draft 的读写与清理
 │   ├── select.ts      # 交互式人工复选
 │   ├── format.ts      # Obsidian + Substack 格式化

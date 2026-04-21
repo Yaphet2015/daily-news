@@ -187,6 +187,7 @@ test('mapSubstackPost preserves full body, source metadata, and cover image', ()
       title: 'The model launch',
       subtitle: 'A closer look',
       body: 'Full article body',
+      htmlBody: '<p>Full article body</p>',
       truncatedBody: 'Short summary',
       publishedAt: new Date('2026-03-15T08:00:00Z'),
       url: 'https://example.substack.com/p/model-launch',
@@ -202,10 +203,12 @@ test('mapSubstackPost preserves full body, source metadata, and cover image', ()
   assert.deepEqual(item, {
     id: 'substack-42',
     source: 'substack',
+    kind: 'substack_post',
     title: 'The model launch',
     subtitle: 'A closer look',
     text: 'Short summary',
     body: 'Full article body',
+    htmlBody: '<p>Full article body</p>',
     publishedAt: '2026-03-15T08:00:00.000Z',
     url: 'https://example.substack.com/p/model-launch',
     author: { name: 'Example Publication' },
@@ -213,6 +216,7 @@ test('mapSubstackPost preserves full body, source metadata, and cover image', ()
       name: 'Example Publication',
       handle: 'examplepub',
       url: 'https://example.substack.com',
+      roundupMode: undefined,
     },
     media: [{ type: 'photo', url: 'https://img.example/cover.jpg' }],
   });
@@ -279,6 +283,7 @@ test('parseSubstackFeed extracts recent post metadata from RSS', () => {
         title: 'Can coding agents relicense open source?',
         subtitle: 'GPT-5.4 and Gemini 3.1 Flash-Lite',
         body: 'In this newsletter: Plus links and notes.',
+        htmlBody: '<p>In this newsletter:</p><p>Plus links and notes.</p>',
         truncatedBody: 'GPT-5.4 and Gemini 3.1 Flash-Lite',
         publishedAt: '2026-03-06T03:55:36.000Z',
         url: 'https://simonw.substack.com/p/can-coding-agents-relicense-open',
@@ -286,6 +291,115 @@ test('parseSubstackFeed extracts recent post metadata from RSS', () => {
       },
     ],
   });
+});
+
+test('mergeConfiguredSubstackPublications appends pinned publications without duplicating followed ones', () => {
+  assert.equal(
+    typeof (collectModule as Record<string, unknown>).mergeConfiguredSubstackPublications,
+    'function',
+  );
+
+  const mergeConfiguredSubstackPublications = (collectModule as Record<string, Function>)
+    .mergeConfiguredSubstackPublications;
+
+  assert.deepEqual(
+    mergeConfiguredSubstackPublications([
+      {
+        name: "Ben's Bites",
+        handle: 'bensbites',
+        slug: 'bensbites',
+        url: 'https://www.bensbites.com',
+      },
+      {
+        name: 'Other Pub',
+        handle: 'otherpub',
+        slug: 'otherpub',
+        url: 'https://otherpub.substack.com',
+      },
+    ]),
+    [
+      {
+        name: "Ben's Bites",
+        handle: 'bensbites',
+        slug: 'bensbites',
+        url: 'https://www.bensbites.com',
+        roundupMode: 'bullet_links',
+      },
+      {
+        name: 'Other Pub',
+        handle: 'otherpub',
+        slug: 'otherpub',
+        url: 'https://otherpub.substack.com',
+      },
+    ],
+  );
+});
+
+test("extractSubstackRoundupEntries expands Ben's Bites bullet sections and skips sponsor or internal links", () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).extractSubstackRoundupEntries, 'function');
+
+  const extractSubstackRoundupEntries = (collectModule as Record<string, Function>)
+    .extractSubstackRoundupEntries;
+
+  const entries = extractSubstackRoundupEntries({
+    id: 'substack-parent-1',
+    source: 'substack',
+    kind: 'substack_post',
+    title: 'AI media goes mainstream',
+    subtitle: 'new tools for creating and editing images, videos and audio',
+    text: 'newsletter excerpt',
+    body: 'newsletter body',
+    htmlBody: [
+      '<h3>🔎 News worth knowing</h3>',
+      '<ul>',
+      '<li><p><strong><a href="https://x.com/AravSrinivas/status/1">Perplexity launched Labs</a></strong><span> - A new mode that combines research, codegen and image generation.</span></p></li>',
+      '<li><p><strong><a href="https://www.bensbites.com/chat">share with us</a></strong><span> your startup</span></p></li>',
+      '</ul>',
+      '<h3>Sponsored</h3>',
+      '<ul><li><p><a href="https://sponsor.example.com">Buy now</a></p></li></ul>',
+      '<h3>🥣 Dev dish</h3>',
+      '<ul>',
+      '<li><p><a href="https://github.com/browser-use/vibetest-use">MCP server</a><span> from Browser Use runs parallel agents to test your vibe-coded app.</span></p></li>',
+      '<li><p><a href="https://www.bensbites.com/subscribe">Subscribe</a></p></li>',
+      '</ul>',
+    ].join(''),
+    publishedAt: '2026-03-15T08:00:00.000Z',
+    url: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+    author: { name: "Ben's Bites" },
+    publication: {
+      name: "Ben's Bites",
+      handle: 'bensbites',
+      url: 'https://www.bensbites.com',
+      roundupMode: 'bullet_links',
+    },
+    media: [],
+  });
+
+  assert.deepEqual(
+    entries.map((entry: { id: string; title: string; url: string; sectionLabel: string; originUrl: string }) => ({
+      id: entry.id,
+      title: entry.title,
+      url: entry.url,
+      sectionLabel: entry.sectionLabel,
+      originUrl: entry.originUrl,
+    })),
+    [
+      {
+        id: 'substack-parent-1-roundup-news-worth-knowing-1',
+        title: 'Perplexity launched Labs',
+        url: 'https://x.com/AravSrinivas/status/1',
+        sectionLabel: 'News worth knowing',
+        originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+      },
+      {
+        id: 'substack-parent-1-roundup-dev-dish-1',
+        title: 'MCP server',
+        url: 'https://github.com/browser-use/vibetest-use',
+        sectionLabel: 'Dev dish',
+        originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+      },
+    ],
+  );
 });
 
 test('buildSubstackCurlArgs routes requests through HTTP_PROXY', () => {
@@ -762,6 +876,158 @@ test('resolveTwitterPrimarySources processes items concurrently with bounded con
   assert.deepEqual(resolved.map((item: { id: string }) => item.id), ['tw-1', 'tw-2']);
 });
 
+test('collapseNumberedSelfThreads merges numbered same-author threads into the root tweet and keeps X origin', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collapseNumberedSelfThreads, 'function');
+
+  const collapseNumberedSelfThreads = (collectModule as Record<string, Function>).collapseNumberedSelfThreads;
+  const collapsed = collapseNumberedSelfThreads([
+    {
+      id: 'part-2',
+      source: 'twitter',
+      text: '2/3\nSecond point with quoted source',
+      publishedAt: '2026-04-21T00:00:05Z',
+      url: 'https://lessons.md',
+      originUrl: 'https://x.com/alice/status/part-2',
+      author: { name: 'Alice', username: 'alice' },
+      media: [{ type: 'photo', url: 'https://img/2.jpg' }],
+      quotedStatusUrl: 'https://x.com/bob/status/quoted-1',
+      sourceLabel: 'lessons.md',
+      sourceResolution: { decision: 'use_linked_source', reason: 'quote_wrapper' },
+    },
+    {
+      id: 'part-1',
+      source: 'twitter',
+      text: '1/3\nRoot point',
+      publishedAt: '2026-04-21T00:00:00Z',
+      url: 'https://x.com/alice/status/part-1',
+      originUrl: 'https://x.com/alice/status/part-1',
+      author: { name: 'Alice', username: 'alice' },
+      media: [{ type: 'photo', url: 'https://img/1.jpg' }],
+      likeCount: 10,
+      replyCount: 2,
+      repostCount: 3,
+      quoteCount: 1,
+    },
+    {
+      id: 'part-3',
+      source: 'twitter',
+      text: '3/3\nThird point',
+      publishedAt: '2026-04-21T00:00:10Z',
+      url: 'https://github.com/example/repo',
+      originUrl: 'https://x.com/alice/status/part-3',
+      author: { name: 'Alice', username: 'alice' },
+      media: [{ type: 'video', url: 'https://video/1.mp4' }],
+      sourceLabel: 'GitHub',
+      sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+    },
+  ]);
+
+  assert.equal(collapsed.length, 1);
+  assert.deepEqual(collapsed[0], {
+    id: 'part-1',
+    source: 'twitter',
+    text: '[1/3] 1/3\nRoot point\n\n[2/3] 2/3\nSecond point with quoted source\n\n[3/3] 3/3\nThird point',
+    publishedAt: '2026-04-21T00:00:00Z',
+    url: 'https://x.com/alice/status/part-1',
+    originUrl: 'https://x.com/alice/status/part-1',
+    author: { name: 'Alice', username: 'alice' },
+    media: [
+      { type: 'photo', url: 'https://img/1.jpg' },
+      { type: 'photo', url: 'https://img/2.jpg' },
+      { type: 'video', url: 'https://video/1.mp4' },
+    ],
+    likeCount: 10,
+    replyCount: 2,
+    repostCount: 3,
+    quoteCount: 1,
+    sourceResolution: { decision: 'keep_origin', reason: 'numbered_self_thread' },
+    selfThread: {
+      partIds: ['part-1', 'part-2', 'part-3'],
+      partCount: 3,
+      combinedText:
+        '[1/3] 1/3\nRoot point\n\n[2/3] 2/3\nSecond point with quoted source\n\n[3/3] 3/3\nThird point',
+      parts: [
+        {
+          id: 'part-1',
+          originUrl: 'https://x.com/alice/status/part-1',
+          text: '1/3\nRoot point',
+          publishedAt: '2026-04-21T00:00:00Z',
+          media: [{ type: 'photo', url: 'https://img/1.jpg' }],
+        },
+        {
+          id: 'part-2',
+          originUrl: 'https://x.com/alice/status/part-2',
+          text: '2/3\nSecond point with quoted source',
+          publishedAt: '2026-04-21T00:00:05Z',
+          media: [{ type: 'photo', url: 'https://img/2.jpg' }],
+        },
+        {
+          id: 'part-3',
+          originUrl: 'https://x.com/alice/status/part-3',
+          text: '3/3\nThird point',
+          publishedAt: '2026-04-21T00:00:10Z',
+          media: [{ type: 'video', url: 'https://video/1.mp4' }],
+        },
+      ],
+    },
+  });
+});
+
+test('collapseNumberedSelfThreads leaves invalid thread candidates as separate tweets', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collapseNumberedSelfThreads, 'function');
+
+  const collapseNumberedSelfThreads = (collectModule as Record<string, Function>).collapseNumberedSelfThreads;
+  const collapsed = collapseNumberedSelfThreads([
+    {
+      id: 'missing-root-2',
+      source: 'twitter',
+      text: '2/3\nNo root',
+      publishedAt: '2026-04-21T00:00:00Z',
+      url: 'https://x.com/alice/status/missing-root-2',
+      originUrl: 'https://x.com/alice/status/missing-root-2',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+    },
+    {
+      id: 'missing-root-3',
+      source: 'twitter',
+      text: '3/3\nNo root',
+      publishedAt: '2026-04-21T00:00:05Z',
+      url: 'https://x.com/alice/status/missing-root-3',
+      originUrl: 'https://x.com/alice/status/missing-root-3',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+    },
+    {
+      id: 'different-author-1',
+      source: 'twitter',
+      text: '1/2\nOther author root',
+      publishedAt: '2026-04-21T00:00:00Z',
+      url: 'https://x.com/bob/status/different-author-1',
+      originUrl: 'https://x.com/bob/status/different-author-1',
+      author: { name: 'Bob', username: 'bob' },
+      media: [],
+    },
+    {
+      id: 'different-author-2',
+      source: 'twitter',
+      text: '2/2\nOther author tail',
+      publishedAt: '2026-04-21T00:20:00Z',
+      url: 'https://x.com/bob/status/different-author-2',
+      originUrl: 'https://x.com/bob/status/different-author-2',
+      author: { name: 'Bob', username: 'carol' },
+      media: [],
+    },
+  ]);
+
+  assert.deepEqual(collapsed.map((item: { id: string }) => item.id), [
+    'missing-root-2',
+    'missing-root-3',
+    'different-author-1',
+    'different-author-2',
+  ]);
+});
+
 test('resolveTwitterPrimarySource keeps the origin tweet when linked-page fetch fails', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
 
@@ -1172,7 +1438,7 @@ test('collectSubstackItems skips broken public feeds and logs the curl failure s
   }
 });
 
-test('collectSubstackItems still fails when SUBSTACK_PUBLICATION_URL is missing', async () => {
+test("collectSubstackItems still includes pinned Ben's Bites when SUBSTACK_PUBLICATION_URL is missing", async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSubstackItems, 'function');
 
   const collectSubstackItems = (collectModule as Record<string, Function>).collectSubstackItems;
@@ -1181,12 +1447,47 @@ test('collectSubstackItems still fails when SUBSTACK_PUBLICATION_URL is missing'
   delete process.env.SUBSTACK_PUBLICATION_URL;
 
   try {
-    await assert.rejects(
-      collectSubstackItems({
-        sinceTime: Date.parse('2026-03-15T07:30:00Z') / 1000,
-      }),
-      /缺少 SUBSTACK_PUBLICATION_URL/,
-    );
+    const items = await collectSubstackItems({
+      sinceTime: Date.parse('2026-03-15T07:30:00Z') / 1000,
+      deps: {
+        fetchPublicSubstackPublications: async () => [
+          {
+            name: "Ben's Bites",
+            handle: 'bensbites',
+            slug: 'bensbites',
+            url: 'https://www.bensbites.com',
+            roundupMode: 'bullet_links',
+          },
+        ],
+        fetchPublicationFeed: async () => ({
+          publication: {
+            name: "Ben's Bites",
+            handle: 'bensbites',
+            slug: 'bensbites',
+            url: 'https://www.bensbites.com',
+            roundupMode: 'bullet_links',
+          },
+          posts: [
+            {
+              id: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+              title: 'ai media goes mainstream',
+              subtitle: 'new tools for creating and editing images',
+              body: 'newsletter body',
+              htmlBody:
+                '<h3>🔎 News worth knowing</h3><ul><li><p><a href="https://example.com/perplexity-labs">Perplexity launched Labs</a> - a new mode.</p></li></ul>',
+              truncatedBody: 'newsletter excerpt',
+              publishedAt: '2026-03-15T08:00:00.000Z',
+              url: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+            },
+          ],
+        }),
+      },
+    });
+
+    assert.deepEqual(items.map((item: { id: string }) => item.id), [
+      'substack-https://www.bensbites.com/p/ai-media-goes-mainstream',
+      'substack-https://www.bensbites.com/p/ai-media-goes-mainstream-roundup-news-worth-knowing-1',
+    ]);
   } finally {
     if (originalPublicationUrl === undefined) {
       delete process.env.SUBSTACK_PUBLICATION_URL;
