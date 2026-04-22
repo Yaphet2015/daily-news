@@ -150,6 +150,137 @@ test('runGenerate writes a fresh pending draft before analysis and preserves it 
   assert.deepEqual(events, ['collect', 'writeDraft', 'attach']);
 });
 
+test('runGenerate preserves the pending draft when curate fails during main_curate', async () => {
+  const events: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runGenerate({
+        readDraft: async () => null,
+        collect: async () => {
+          events.push('collect');
+          return createSnapshot();
+        },
+        writeDraft: async () => {
+          events.push('writeDraft');
+        },
+        clearDraft: async () => {
+          events.push('clearDraft');
+        },
+        readState: async () => ({
+          sources: {
+            twitter: { lastPublishedTime: 100 },
+            substack: { lastPublishedTime: 0 },
+          },
+        }),
+        writeState: async () => {
+          events.push('writeState');
+        },
+        attachReaderBriefs: async (items) => {
+          events.push(`attach:${items.length}`);
+          return items;
+        },
+        rankItems: (items) => {
+          events.push(`rank:${items.length}`);
+          return items as never;
+        },
+        selectCandidatePool: (items) => {
+          events.push(`pool:${items.length}`);
+          return items as never;
+        },
+        curate: async () => {
+          events.push('curate:main_curate');
+          throw new Error('main_curate failed');
+        },
+        select: async (items) => items,
+        format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+        publish: async () => {
+          events.push('publish');
+        },
+        log: () => {},
+      }),
+    /main_curate failed/,
+  );
+
+  assert.deepEqual(events, ['collect', 'writeDraft', 'attach:1', 'rank:1', 'pool:1', 'curate:main_curate']);
+});
+
+test('runGenerate preserves the pending draft when curate fails during forced_roundup', async () => {
+  const events: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runGenerate({
+        readDraft: async () => null,
+        collect: async () => {
+          events.push('collect');
+          return createSnapshot({
+            enabledSources: ['twitter', 'substack'],
+            items: [
+              ...createSnapshot().items,
+              {
+                id: 'ss-roundup-1',
+                source: 'substack',
+                kind: 'substack_roundup_entry',
+                title: 'Perplexity launched Labs',
+                text: 'A useful roundup entry',
+                sectionLabel: 'News worth knowing',
+                parentItemId: 'substack-parent-1',
+                forceSelect: true,
+                originUrl: 'https://www.bensbites.com/p/post',
+                publishedAt: '2026-03-15T00:00:00Z',
+                url: 'https://example.com/perplexity-labs',
+                author: { name: "Ben's Bites" },
+                publication: { name: "Ben's Bites", handle: 'bensbites', url: 'https://www.bensbites.com' },
+                media: [],
+              },
+            ] as unknown as CollectionSnapshot['items'],
+          });
+        },
+        writeDraft: async () => {
+          events.push('writeDraft');
+        },
+        clearDraft: async () => {
+          events.push('clearDraft');
+        },
+        readState: async () => ({
+          sources: {
+            twitter: { lastPublishedTime: 100 },
+            substack: { lastPublishedTime: 0 },
+          },
+        }),
+        writeState: async () => {
+          events.push('writeState');
+        },
+        attachReaderBriefs: async (items) => {
+          events.push(`attach:${items.length}`);
+          return items;
+        },
+        rankItems: (items) => {
+          events.push(`rank:${items.length}`);
+          return items as never;
+        },
+        selectCandidatePool: (items) => {
+          events.push(`pool:${items.length}`);
+          return items.filter((item) => item.id === 'tw-1') as never;
+        },
+        curate: async () => {
+          events.push('curate:forced_roundup');
+          throw new Error('forced_roundup failed');
+        },
+        select: async (items) => items,
+        format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+        publish: async () => {
+          events.push('publish');
+        },
+        log: () => {},
+      }),
+    /forced_roundup failed/,
+  );
+
+  assert.deepEqual(events, ['collect', 'writeDraft', 'attach:2', 'rank:2', 'pool:2', 'curate:forced_roundup']);
+});
+
 test('runGenerate discards an old pending draft before collecting a fresh snapshot', async () => {
   const events: string[] = [];
 

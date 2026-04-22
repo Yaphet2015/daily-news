@@ -27,8 +27,51 @@ interface CurateResponse {
 
 type ReaderFn = (item: CollectedItem) => Promise<ReaderBrief>;
 type ForcedRoundupGenerator = (items: CollectedItem[]) => Promise<CurateResponse>;
+type LlmCallLabel = 'reader_brief' | 'main_curate' | 'forced_roundup';
+type LlmJsonErrorCode = 'empty_response' | 'invalid_json' | 'invalid_schema';
+
+interface LlmUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+interface LlmJsonResponse {
+  callLabel: LlmCallLabel;
+  model: string;
+  rawText: string;
+  finishReason: string | null;
+  usage: LlmUsage | null;
+}
+
+interface JsonCallRequest {
+  systemPrompt: string;
+  userContent: string;
+  model: string;
+  callLabel: LlmCallLabel;
+}
+
+export interface LlmJsonCallOptions {
+  model?: string;
+  jsonCaller?: (request: JsonCallRequest) => Promise<LlmJsonResponse>;
+  warn?: (message: string) => void;
+}
+
 const VALID_CATEGORIES: NewsCategory[] = ['Product', 'Tutorial', 'Opinions/Thoughts'];
 const CURATED_ITEM_SOFT_FLOOR = 40;
+const JSON_RETRY_LIMIT = 2;
+const RESPONSE_PREVIEW_LIMIT = 160;
+
+class LlmJsonError extends Error {
+  constructor(
+    readonly code: LlmJsonErrorCode,
+    readonly response: LlmJsonResponse,
+    detail: string,
+  ) {
+    super(formatLlmJsonErrorMessage(code, response, detail));
+    this.name = 'LlmJsonError';
+  }
+}
 
 function isRankedItem(item: CollectedItem): item is RankedItem {
   return (
@@ -43,19 +86,46 @@ function isRankedItem(item: CollectedItem): item is RankedItem {
   );
 }
 
-function parseJson<T>(raw: string): T {
-  const cleaned = raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
-  return JSON.parse(cleaned) as T;
+function stripJsonFences(raw: string): string {
+  return raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
 }
 
-export function warnOnUnderfilledCuratedItems(
-  itemCount: number,
-  warn: (message: string) => void = console.warn,
-): void {
-  if (itemCount >= CURATED_ITEM_SOFT_FLOOR) return;
-  warn(
-    `[curate] AI 仅整理出 ${itemCount} 条资讯，低于软下限 ${CURATED_ITEM_SOFT_FLOOR}；本次不会回填低优先级条目。`,
-  );
+function parseJson<T>(raw: string): T {
+  return JSON.parse(stripJsonFences(raw)) as T;
+}
+
+function summarizeUsage(usage: LlmUsage | null): string {
+  if (!usage) return 'unknown';
+
+  const prompt = usage.promptTokens ?? '?';
+  const completion = usage.completionTokens ?? '?';
+  const total = usage.totalTokens ?? '?';
+  return `prompt=${prompt}, completion=${completion}, total=${total}`;
+}
+
+function toPreview(value: string, mode: 'head' | 'tail'): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= RESPONSE_PREVIEW_LIMIT) return compact;
+  return mode === 'head'
+    ? `${compact.slice(0, RESPONSE_PREVIEW_LIMIT)}...`
+    : `...${compact.slice(-RESPONSE_PREVIEW_LIMIT)}`;
+}
+
+function formatLlmJsonErrorMessage(code: LlmJsonErrorCode, response: LlmJsonResponse, detail: string): string {
+  return [
+    `[curate][${response.callLabel}] ${detail}`,
+    `model=${response.model}`,
+    `finishReason=${response.finishReason ?? 'unknown'}`,
+    `usage=${summarizeUsage(response.usage)}`,
+    `rawTextLength=${response.rawText.length}`,
+    `headPreview="${toPreview(response.rawText, 'head')}"`,
+    `tailPreview="${toPreview(response.rawText, 'tail')}"`,
+    `code=${code}`,
+  ].join(', ');
+}
+
+function summarizeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function validateStringArray(value: unknown): string[] | null {
@@ -130,11 +200,60 @@ function isSubstackRoundupEntry(item: CollectedItem): boolean {
   return item.source === 'substack' && item.kind === 'substack_roundup_entry';
 }
 
-async function generateJsonObject<T>(
-  systemPrompt: string,
-  userContent: string,
-  model: string,
-): Promise<T> {
+function normalizeLlmUsage(raw: unknown): LlmUsage | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const usage = raw as Record<string, unknown>;
+  const promptTokens = typeof usage.promptTokens === 'number'
+    ? usage.promptTokens
+    : typeof usage.prompt_tokens === 'number'
+      ? usage.prompt_tokens
+      : undefined;
+  const completionTokens = typeof usage.completionTokens === 'number'
+    ? usage.completionTokens
+    : typeof usage.completion_tokens === 'number'
+      ? usage.completion_tokens
+      : undefined;
+  const totalTokens = typeof usage.totalTokens === 'number'
+    ? usage.totalTokens
+    : typeof usage.total_tokens === 'number'
+      ? usage.total_tokens
+      : undefined;
+
+  if (
+    typeof promptTokens !== 'number' &&
+    typeof completionTokens !== 'number' &&
+    typeof totalTokens !== 'number'
+  ) {
+    return null;
+  }
+
+  return { promptTokens, completionTokens, totalTokens };
+}
+
+function extractOpenAiMessageContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        const text = (part as Record<string, unknown>).text;
+        return typeof text === 'string' ? text : '';
+      })
+      .join('\n');
+  }
+
+  return '';
+}
+
+async function generateJsonResponse({
+  systemPrompt,
+  userContent,
+  model,
+  callLabel,
+}: JsonCallRequest): Promise<LlmJsonResponse> {
   const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
   const hasAiSdk = Boolean(process.env.AI_BASE_URL && process.env.AI_API_KEY);
 
@@ -149,7 +268,13 @@ async function generateJsonObject<T>(
       response_format: { type: 'json_object' },
     });
 
-    return parseJson<T>(response.choices[0]?.message?.content ?? '');
+    return {
+      callLabel,
+      model,
+      rawText: extractOpenAiMessageContent(response.choices[0]?.message?.content ?? ''),
+      finishReason: response.choices[0]?.finish_reason ?? null,
+      usage: normalizeLlmUsage(response.usage),
+    };
   }
 
   if (hasAiSdk) {
@@ -158,16 +283,119 @@ async function generateJsonObject<T>(
       apiKey: process.env.AI_API_KEY!,
     });
 
-    const { text } = await generateText({
+    const result = await generateText({
       model: openai(model),
       system: systemPrompt,
       prompt: userContent,
     });
 
-    return parseJson<T>(text);
+    return {
+      callLabel,
+      model,
+      rawText: result.text,
+      finishReason: result.finishReason ?? null,
+      usage: normalizeLlmUsage(result.usage),
+    };
   }
 
   throw new Error('AI 配置缺失：请在 .env 中设置 OPENAI_API_KEY，或同时设置 AI_BASE_URL 和 AI_API_KEY');
+}
+
+function parseStructuredJson<T>(response: LlmJsonResponse): T {
+  const cleaned = stripJsonFences(response.rawText);
+  if (cleaned.length === 0) {
+    throw new LlmJsonError('empty_response', response, 'AI 响应为空，无法解析 JSON');
+  }
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch (error) {
+    throw new LlmJsonError('invalid_json', response, `AI 响应不是有效 JSON: ${summarizeError(error)}`);
+  }
+}
+
+function validateCurateItems(items: unknown, response: LlmJsonResponse | null): LlmCuratedItem[] {
+  if (!Array.isArray(items)) {
+    if (response) throw new LlmJsonError('invalid_schema', response, 'AI 响应缺少顶层 items 数组');
+    throw new Error('AI 响应缺少 items 字段');
+  }
+
+  return items.map((item) => {
+    if (!item || typeof item !== 'object') {
+      if (response) throw new LlmJsonError('invalid_schema', response, 'AI 响应包含非对象条目');
+      throw new Error('AI 响应包含非对象条目');
+    }
+
+    const candidate = item as LlmCuratedItem;
+    if (typeof candidate.id !== 'string' || candidate.id.length === 0) {
+      if (response) throw new LlmJsonError('invalid_schema', response, 'AI 响应包含无效 id');
+      throw new Error('AI 响应包含无效 id');
+    }
+    if (!VALID_CATEGORIES.includes(candidate.category)) {
+      if (response) {
+        throw new LlmJsonError('invalid_schema', response, `AI 响应包含无效分类: ${String(candidate.category)}`);
+      }
+      throw new Error(`AI 响应包含无效分类: ${String(candidate.category)}`);
+    }
+
+    return candidate;
+  });
+}
+
+function parseCurateResponse(raw: string | LlmJsonResponse): LlmCuratedItem[] {
+  if (typeof raw === 'string') {
+    const parsed = parseJson<CurateResponse>(raw);
+    return validateCurateItems(parsed.items, null);
+  }
+
+  const parsed = parseStructuredJson<Record<string, unknown>>(raw);
+  return validateCurateItems(parsed.items, raw);
+}
+
+// Accepts a plain string or an array of strings (AI sometimes returns arrays).
+const normalizeString = (v: unknown): string | null =>
+  Array.isArray(v)
+    ? (v as unknown[]).every((x) => typeof x === 'string') ? (v as string[]).join(' ') : null
+    : typeof v === 'string' ? v : null;
+
+export function parseReaderBrief(raw: string | LlmJsonResponse): ReaderBrief {
+  const parsed = typeof raw === 'string'
+    ? parseJson<Record<string, unknown>>(raw)
+    : parseStructuredJson<Record<string, unknown>>(raw);
+  const summary = normalizeString(parsed.summary);
+  const whyItMatters = normalizeString(parsed.whyItMatters);
+  const keyPoints = normalizeOptionalStringArray(parsed.keyPoints);
+  const claims = normalizeOptionalStringArray(parsed.claims);
+  const signals = normalizeOptionalStringArray(parsed.signals);
+  const caveats = normalizeOptionalStringArray(parsed.caveats);
+
+  if (
+    !summary ||
+    !whyItMatters ||
+    !keyPoints ||
+    !claims ||
+    !signals ||
+    !caveats
+  ) {
+    console.error(`❌ || parseReaderBrief error, parsed: `, JSON.stringify(parsed, null, 2));
+    console.error(`❌ || keyPoints`, keyPoints);
+    console.error(`❌ || claims`, claims);
+    console.error(`❌ || signals`, signals);
+    console.error(`❌ || caveats`, caveats);
+    if (typeof raw !== 'string') {
+      throw new LlmJsonError('invalid_schema', raw, 'reader brief 缺少必填字段或字段类型无效');
+    }
+    throw new Error('Invalid reader brief response');
+  }
+
+  return {
+    summary,
+    keyPoints,
+    claims,
+    whyItMatters,
+    signals,
+    caveats,
+  };
 }
 
 async function readSubstackArticle(item: CollectedItem): Promise<ReaderBrief> {
@@ -189,65 +417,28 @@ async function readSubstackArticle(item: CollectedItem): Promise<ReaderBrief> {
     item.body ?? item.text,
   ].join('\n');
 
-  const brief = await generateJsonObject<ReaderBrief>(systemPrompt, userContent, model);
-  return parseReaderBrief(JSON.stringify(brief));
-}
-
-function parseCurateResponse(raw: string): LlmCuratedItem[] {
-  const parsed = parseJson<CurateResponse>(raw);
-  if (!Array.isArray(parsed.items)) throw new Error('AI 响应缺少 items 字段');
-
-  return parsed.items.map((item) => {
-    if (typeof item.id !== 'string' || item.id.length === 0) {
-      throw new Error('AI 响应包含无效 id');
-    }
-    if (!VALID_CATEGORIES.includes(item.category)) {
-      throw new Error(`AI 响应包含无效分类: ${item.category}`);
-    }
-
-    return item;
-  });
-}
-
-// Accepts a plain string or an array of strings (AI sometimes returns arrays).
-const normalizeString = (v: unknown): string | null =>
-  Array.isArray(v)
-    ? (v as unknown[]).every((x) => typeof x === 'string') ? (v as string[]).join(' ') : null
-    : typeof v === 'string' ? v : null;
-
-export function parseReaderBrief(raw: string): ReaderBrief {
-  const parsed = parseJson<Record<string, unknown>>(raw);
-  const summary = normalizeString(parsed.summary);
-  const whyItMatters = normalizeString(parsed.whyItMatters);
-  const keyPoints = normalizeOptionalStringArray(parsed.keyPoints);
-  const claims = normalizeOptionalStringArray(parsed.claims);
-  const signals = normalizeOptionalStringArray(parsed.signals);
-  const caveats = normalizeOptionalStringArray(parsed.caveats);
-
-  if (
-    !summary ||
-    !whyItMatters ||
-    !keyPoints ||
-    !claims ||
-    !signals ||
-    !caveats
-  ) {
-    console.error(`❌ || parseReaderBrief error, parsed: `, JSON.stringify(parsed, null, 2));
-    console.error(`❌ || keyPoints`, keyPoints);
-    console.error(`❌ || claims`, claims);
-    console.error(`❌ || signals`, signals);
-    console.error(`❌ || caveats`, caveats);
-    throw new Error('Invalid reader brief response');
+  try {
+    const response = await generateJsonResponse({
+      systemPrompt,
+      userContent,
+      model,
+      callLabel: 'reader_brief',
+    });
+    return parseReaderBrief(response);
+  } catch (error) {
+    console.error(`[curate] reader_brief failed for ${item.id}: ${summarizeError(error)}`);
+    throw error;
   }
+}
 
-  return {
-    summary,
-    keyPoints,
-    claims,
-    whyItMatters,
-    signals,
-    caveats,
-  };
+export function warnOnUnderfilledCuratedItems(
+  itemCount: number,
+  warn: (message: string) => void = console.warn,
+): void {
+  if (itemCount >= CURATED_ITEM_SOFT_FLOOR) return;
+  warn(
+    `[curate] AI 仅整理出 ${itemCount} 条资讯，低于软下限 ${CURATED_ITEM_SOFT_FLOOR}；本次不会回填低优先级条目。`,
+  );
 }
 
 export async function attachReaderBriefs(
@@ -417,18 +608,59 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
   return Array.from(byUrl.values());
 }
 
-async function generateForcedRoundupResponse(items: CollectedItem[]): Promise<CurateResponse> {
-  const model = process.env.OPENAI_API_KEY
-    ? process.env.SUBSTACK_READER_MODEL ?? FORCED_ROUNDUP_MODEL
-    : process.env.AI_MODEL ?? FORCED_ROUNDUP_MODEL;
+async function parseCurateItemsWithRetry(
+  request: JsonCallRequest,
+  options: LlmJsonCallOptions = {},
+): Promise<LlmCuratedItem[]> {
+  const jsonCaller = options.jsonCaller ?? generateJsonResponse;
+  const warn = options.warn ?? console.warn;
+  let lastError: unknown;
 
-  const response = await generateJsonObject<CurateResponse>(
-    'You are a technology news editor. Return strict JSON only. For every input roundup entry, produce one Chinese digest item with id, title, summary, url, author, category, and editorialReason. Do not drop any item.',
-    `请将以下 roundup 子条目逐条整理成中文资讯，每条输入都必须返回一条输出：\n\n${buildForcedRoundupPayload(items)}`,
-    model,
+  for (let attempt = 1; attempt <= JSON_RETRY_LIMIT; attempt += 1) {
+    const response = await jsonCaller(request);
+    try {
+      return parseCurateResponse(response);
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof LlmJsonError) || attempt >= JSON_RETRY_LIMIT) throw error;
+      warn(
+        `[curate] ${request.callLabel} 返回了无效 JSON/schema，正在重试一次: ${error.message}`,
+      );
+    }
+  }
+
+  throw lastError ?? new Error(`[curate] ${request.callLabel} 未返回有效结果`);
+}
+
+export async function generateForcedRoundupResponse(
+  items: CollectedItem[],
+  options: LlmJsonCallOptions = {},
+): Promise<CurateResponse> {
+  const model = options.model ?? (
+    process.env.OPENAI_API_KEY
+      ? process.env.SUBSTACK_READER_MODEL ?? FORCED_ROUNDUP_MODEL
+      : process.env.AI_MODEL ?? FORCED_ROUNDUP_MODEL
   );
 
-  return response;
+  const responseItems = await parseCurateItemsWithRetry(
+    {
+      callLabel: 'forced_roundup',
+      model,
+      systemPrompt: [
+        'You are a technology news editor.',
+        'Return strict JSON only.',
+        'The top-level object must contain exactly one field named items.',
+        'For every input roundup entry, produce exactly one Chinese digest item.',
+        'Each item must include id, title, summary, url, author, category, and editorialReason.',
+        'category must be exactly one of Product, Tutorial, or Opinions/Thoughts.',
+        'Do not drop any item and do not rename the top-level field.',
+      ].join(' '),
+      userContent: `请将以下 roundup 子条目逐条整理成中文资讯，每条输入都必须返回一条输出，顶层字段名必须是 items：\n\n${buildForcedRoundupPayload(items)}`,
+    },
+    options,
+  );
+
+  return { items: responseItems };
 }
 
 export async function enrichForcedRoundupItems(
@@ -463,13 +695,26 @@ export function mergeCuratedItems(primary: CuratedItem[], forced: CuratedItem[])
     .sort((a, b) => (b.priorityScore ?? Number.NEGATIVE_INFINITY) - (a.priorityScore ?? Number.NEGATIVE_INFINITY));
 }
 
-async function curateWithModel(systemPrompt: string, userContent: string): Promise<LlmCuratedItem[]> {
-  const model = process.env.OPENAI_API_KEY
-    ? process.env.OPENAI_MODEL ?? 'gpt-4o'
-    : process.env.AI_MODEL ?? 'gpt-4o';
+export async function curateWithModel(
+  systemPrompt: string,
+  userContent: string,
+  options: LlmJsonCallOptions = {},
+): Promise<LlmCuratedItem[]> {
+  const model = options.model ?? (
+    process.env.OPENAI_API_KEY
+      ? process.env.OPENAI_MODEL ?? 'gpt-4o'
+      : process.env.AI_MODEL ?? 'gpt-4o'
+  );
 
-  const response = await generateJsonObject<CurateResponse>(systemPrompt, userContent, model);
-  return parseCurateResponse(JSON.stringify(response));
+  return parseCurateItemsWithRetry(
+    {
+      callLabel: 'main_curate',
+      model,
+      systemPrompt,
+      userContent,
+    },
+    options,
+  );
 }
 
 export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
@@ -488,15 +733,30 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
       `以下是从多个信息源采集的 ${normalItems.length} 条内容，请按要求筛选整理：\n\n` +
       buildCollectedItemsPayload(normalItems);
 
-    console.log('[curate] 预处理 Substack 文章并调用主整理模型...');
-    const llmItems = await curateWithModel(systemPrompt, userContent);
-    curatedItems = enrichCuratedItems(llmItems, normalItems);
-    if (curatedItems.length < llmItems.length) {
-      console.warn(`[curate] 已丢弃 ${llmItems.length - curatedItems.length} 条重复或无效的 AI 输出条目`);
+    console.log('[curate] main_curate: 预处理 Substack 文章并调用主整理模型...');
+    try {
+      const llmItems = await curateWithModel(systemPrompt, userContent);
+      curatedItems = enrichCuratedItems(llmItems, normalItems);
+      if (curatedItems.length < llmItems.length) {
+        console.warn(`[curate] 已丢弃 ${llmItems.length - curatedItems.length} 条重复或无效的 AI 输出条目`);
+      }
+    } catch (error) {
+      console.error(`[curate] main_curate failed: ${summarizeError(error)}`);
+      throw error;
     }
   }
 
-  const forcedCuratedItems = await enrichForcedRoundupItems(forcedRoundupItems);
+  let forcedCuratedItems: CuratedItem[] = [];
+  if (forcedRoundupItems.length > 0) {
+    console.log(`[curate] forced_roundup: 整理 ${forcedRoundupItems.length} 条 roundup 子项...`);
+    try {
+      forcedCuratedItems = await enrichForcedRoundupItems(forcedRoundupItems);
+    } catch (error) {
+      console.error(`[curate] forced_roundup failed: ${summarizeError(error)}`);
+      throw error;
+    }
+  }
+
   const merged = mergeCuratedItems(curatedItems, forcedCuratedItems);
   warnOnUnderfilledCuratedItems(merged.length);
 

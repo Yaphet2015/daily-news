@@ -308,6 +308,186 @@ test('parseReaderBrief still rejects invalid list payload types', () => {
   );
 });
 
+test('curateWithModel retries once after an empty main_curate response and then succeeds', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).curateWithModel, 'function');
+
+  const curateWithModel = (curateModule as Record<string, Function>).curateWithModel;
+  let calls = 0;
+
+  const items = await curateWithModel('system', 'user', {
+    model: 'fake-main-model',
+    jsonCaller: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          callLabel: 'main_curate',
+          model: 'fake-main-model',
+          rawText: '',
+          finishReason: 'stop',
+          usage: { promptTokens: 10, completionTokens: 0, totalTokens: 10 },
+        };
+      }
+
+      return {
+        callLabel: 'main_curate',
+        model: 'fake-main-model',
+        rawText: JSON.stringify({
+          items: [
+            {
+              id: 'tw-1',
+              title: '标题',
+              summary: '摘要',
+              url: 'https://example.com/story',
+              author: 'Alice',
+              category: 'Product',
+              editorialReason: '值得关注。',
+            },
+          ],
+        }),
+        finishReason: 'stop',
+        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+      };
+    },
+    warn: () => {},
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual(items, [
+    {
+      id: 'tw-1',
+      title: '标题',
+      summary: '摘要',
+      url: 'https://example.com/story',
+      author: 'Alice',
+      category: 'Product',
+      editorialReason: '值得关注。',
+    },
+  ]);
+});
+
+test('curateWithModel surfaces metadata-rich errors after truncated fenced JSON responses', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).curateWithModel, 'function');
+
+  const curateWithModel = (curateModule as Record<string, Function>).curateWithModel;
+
+  await assert.rejects(
+    curateWithModel('system', 'user', {
+      model: 'fake-main-model',
+      jsonCaller: async () => ({
+        callLabel: 'main_curate',
+        model: 'fake-main-model',
+        rawText: '```json\n{"items":[{"id":"tw-1"}]',
+        finishReason: 'length',
+        usage: { promptTokens: 42, completionTokens: 7, totalTokens: 49 },
+      }),
+      warn: () => {},
+    }),
+    (error: unknown) => {
+      assert.match(String(error), /main_curate/);
+      assert.match(String(error), /fake-main-model/);
+      assert.match(String(error), /finishReason=length/);
+      assert.match(String(error), /rawTextLength=/);
+      assert.match(String(error), /headPreview=/);
+      assert.match(String(error), /tailPreview=/);
+      return true;
+    },
+  );
+});
+
+test('generateForcedRoundupResponse rejects schema-mismatch responses that omit items', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).generateForcedRoundupResponse, 'function');
+
+  const generateForcedRoundupResponse = (curateModule as Record<string, Function>).generateForcedRoundupResponse;
+
+  await assert.rejects(
+    generateForcedRoundupResponse(
+      [
+        {
+          id: 'roundup-1',
+          source: 'substack',
+          kind: 'substack_roundup_entry',
+          title: 'Perplexity launched Labs',
+          text: 'A useful roundup entry',
+          sectionLabel: 'News worth knowing',
+          forceSelect: true,
+          originUrl: 'https://www.bensbites.com/p/post',
+          publishedAt: '2026-03-15T01:00:00Z',
+          url: 'https://example.com/perplexity-labs',
+          author: { name: "Ben's Bites" },
+          publication: { name: "Ben's Bites", handle: 'bensbites', url: 'https://www.bensbites.com' },
+          media: [],
+        },
+      ],
+      {
+        model: 'fake-roundup-model',
+        jsonCaller: async () => ({
+          callLabel: 'forced_roundup',
+          model: 'fake-roundup-model',
+          rawText: JSON.stringify({
+            digest: [],
+          }),
+          finishReason: 'stop',
+          usage: { promptTokens: 20, completionTokens: 8, totalTokens: 28 },
+        }),
+        warn: () => {},
+      },
+    ),
+    /forced_roundup.*items/i,
+  );
+});
+
+test('generateForcedRoundupResponse rejects invalid roundup categories', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).generateForcedRoundupResponse, 'function');
+
+  const generateForcedRoundupResponse = (curateModule as Record<string, Function>).generateForcedRoundupResponse;
+
+  await assert.rejects(
+    generateForcedRoundupResponse(
+      [
+        {
+          id: 'roundup-1',
+          source: 'substack',
+          kind: 'substack_roundup_entry',
+          title: 'Perplexity launched Labs',
+          text: 'A useful roundup entry',
+          sectionLabel: 'News worth knowing',
+          forceSelect: true,
+          originUrl: 'https://www.bensbites.com/p/post',
+          publishedAt: '2026-03-15T01:00:00Z',
+          url: 'https://example.com/perplexity-labs',
+          author: { name: "Ben's Bites" },
+          publication: { name: "Ben's Bites", handle: 'bensbites', url: 'https://www.bensbites.com' },
+          media: [],
+        },
+      ],
+      {
+        model: 'fake-roundup-model',
+        jsonCaller: async () => ({
+          callLabel: 'forced_roundup',
+          model: 'fake-roundup-model',
+          rawText: JSON.stringify({
+            items: [
+              {
+                id: 'roundup-1',
+                title: '标题',
+                summary: '摘要',
+                url: 'https://example.com/perplexity-labs',
+                author: "Ben's Bites",
+                category: '其他',
+                editorialReason: '值得关注。',
+              },
+            ],
+          }),
+          finishReason: 'stop',
+          usage: { promptTokens: 20, completionTokens: 8, totalTokens: 28 },
+        }),
+        warn: () => {},
+      },
+    ),
+    /forced_roundup.*无效分类|invalid category/i,
+  );
+});
+
 test('buildCollectedItemsPayload uses reader brief for Substack items instead of raw body', () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).buildCollectedItemsPayload, 'function');
 
