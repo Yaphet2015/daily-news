@@ -6,18 +6,103 @@ const PREVIEW_MAX_LINES = 3;
 const SHORT_TWEET_THRESHOLD = 500;
 
 function formatPreview(summary: string): string[] {
+  const paragraphs = summary
+    .replace(/\r\n?/g, '\n')
+    .trim()
+    .split(/\n\s*\n+/)
+    .map((paragraph) =>
+      paragraph
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter(Boolean);
   const lines: string[] = [];
+  let truncated = false;
 
-  for (let offset = 0; offset < summary.length && lines.length < PREVIEW_MAX_LINES; offset += PREVIEW_LINE_LENGTH) {
-    lines.push(summary.slice(offset, offset + PREVIEW_LINE_LENGTH));
+  for (const paragraph of paragraphs) {
+    const paragraphLines = wrapParagraph(paragraph);
+
+    if (lines.length > 0) {
+      if (lines.length + 1 >= PREVIEW_MAX_LINES) {
+        truncated = true;
+        break;
+      }
+      lines.push('');
+    }
+
+    for (const line of paragraphLines) {
+      if (lines.length >= PREVIEW_MAX_LINES) {
+        truncated = true;
+        break;
+      }
+      lines.push(line);
+    }
+
+    if (truncated) break;
   }
 
-  if (summary.length > PREVIEW_LINE_LENGTH * PREVIEW_MAX_LINES && lines.length > 0) {
-    const lastLine = lines[lines.length - 1] ?? '';
-    lines[lines.length - 1] = lastLine.slice(0, Math.max(0, PREVIEW_LINE_LENGTH - 1)) + '…';
+  if (truncated) {
+    appendEllipsis(lines);
   }
 
   return lines;
+}
+
+function wrapParagraph(paragraph: string): string[] {
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const word of paragraph.split(' ')) {
+    if (word.length === 0) continue;
+
+    if (currentLine.length === 0) {
+      currentLine = appendWordToEmptyLine(lines, word);
+      continue;
+    }
+
+    if (currentLine.length + 1 + word.length <= PREVIEW_LINE_LENGTH) {
+      currentLine += ` ${word}`;
+      continue;
+    }
+
+    lines.push(currentLine);
+    currentLine = appendWordToEmptyLine(lines, word);
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+function appendWordToEmptyLine(lines: string[], word: string): string {
+  let remaining = word;
+
+  while (remaining.length > PREVIEW_LINE_LENGTH) {
+    lines.push(remaining.slice(0, PREVIEW_LINE_LENGTH));
+    remaining = remaining.slice(PREVIEW_LINE_LENGTH);
+  }
+
+  return remaining;
+}
+
+function appendEllipsis(lines: string[]): void {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index];
+    if (line == null || line.length === 0) continue;
+
+    lines[index] = `${line.slice(0, Math.max(0, PREVIEW_LINE_LENGTH - 1)).trimEnd()}…`;
+    return;
+  }
+
+  if (lines.length > 0) {
+    lines[lines.length - 1] = '…';
+  }
 }
 
 function formatMediaPlaceholder(media: MediaAsset[]): string | null {

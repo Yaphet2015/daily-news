@@ -29,6 +29,34 @@ test('formatSelectionLabel shows ranking metadata before a multi-line summary pr
   assert.match(label, /      A{70}\n      A{70}\n      A{40}/);
 });
 
+test('formatSelectionLabel preserves paragraph breaks in short origin tweet previews without splitting words', () => {
+  const label = formatSelectionLabel(
+    {
+      id: 'tw-sama',
+      title: 'Sam Altman：对 GPT-5.5 市场反馈的感言',
+      summary: 'unused summary',
+      url: 'https://x.com/sama/status/2048554097985593849',
+      originUrl: 'https://x.com/sama/status/2048554097985593849',
+      author: 'sama',
+      attribution: '@sama',
+      source: 'twitter',
+      category: 'Opinions/Thoughts',
+      media: [],
+      priorityScore: 31,
+      decisionReasons: ['新', '低质量内容', '弱证据'],
+      sourceResolution: { decision: 'keep_origin', reason: 'test' },
+      originText:
+        'so fun to see the reception to 5.5!\n\nthere is almost nothing that feels more gratifying to me than builders saying they find our tools useful.',
+    },
+    0,
+  );
+
+  assert.match(label, /      so fun to see the reception to 5\.5!\n      \n      there is almost nothing that feels/);
+  assert.doesNotMatch(label, /\nthere is almost nothing/);
+  assert.doesNotMatch(label, /feel\n      s/);
+  assert.doesNotMatch(label, /usefu\n      l/);
+});
+
 test('formatSelectionLabel only shows the original-post URL line when url matches originUrl', () => {
   const label = formatSelectionLabel(
     {
