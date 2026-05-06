@@ -6,6 +6,11 @@ import type { FormatResult, SelectionReport } from './types.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, '..', 'output');
 
+function getObsidianFilePath(vaultPath: string, date: string): string {
+  const monthFolder = date.slice(0, 7);
+  return join(vaultPath, monthFolder, `${date}-daily-news.md`);
+}
+
 async function saveObsidian(content: string, date: string): Promise<string> {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH;
   if (!vaultPath) {
@@ -13,8 +18,8 @@ async function saveObsidian(content: string, date: string): Promise<string> {
     return '';
   }
 
-  const filename = `${date}-daily-news.md`;
-  const filepath = join(vaultPath, filename);
+  const filepath = getObsidianFilePath(vaultPath, date);
+  await mkdir(dirname(filepath), { recursive: true });
   await writeFile(filepath, content, 'utf-8');
   console.log(`[publish] Obsidian 文件已保存: ${filepath}`);
   return filepath;

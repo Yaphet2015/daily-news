@@ -3,8 +3,31 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeSelectionReport } from '../src/publish.js';
+import { publish, writeSelectionReport } from '../src/publish.js';
 import type { SelectionReport } from '../src/types.js';
+
+test('publish saves Obsidian markdown under a YYYY-MM monthly folder', async () => {
+  const vaultDir = await mkdtemp(join(tmpdir(), 'daily-news-vault-'));
+  const originalVaultPath = process.env.OBSIDIAN_VAULT_PATH;
+  process.env.OBSIDIAN_VAULT_PATH = vaultDir;
+
+  try {
+    await publish({
+      date: '2026-04-30',
+      obsidian: '# note',
+      substack: '<p>x</p>',
+    });
+
+    const filepath = join(vaultDir, '2026-04', '2026-04-30-daily-news.md');
+    assert.equal(await readFile(filepath, 'utf-8'), '# note');
+  } finally {
+    if (originalVaultPath === undefined) {
+      delete process.env.OBSIDIAN_VAULT_PATH;
+    } else {
+      process.env.OBSIDIAN_VAULT_PATH = originalVaultPath;
+    }
+  }
+});
 
 test('writeSelectionReport persists ranking, curation, and human selection metadata', async () => {
   const outputDir = await mkdtemp(join(tmpdir(), 'daily-news-report-'));

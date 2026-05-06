@@ -91,7 +91,7 @@ npm run generate
 |------|------|
 | `OBSIDIAN_VAULT_PATH` | Vault 中保存日刊的目录绝对路径，如 `/Users/you/Vault/daily-news` |
 
-留空则跳过 Obsidian 保存，仅输出到 `output/` 目录。
+留空则跳过 Obsidian 保存，仅输出到 `output/` 目录。配置后会在该目录下按月保存到 `YYYY-MM/` 子目录。
 
 ### Substack
 
@@ -148,7 +148,7 @@ output/YYYY-MM-DD-substack.html
 | 路径 | 说明 |
 |------|------|
 | `output/YYYY-MM-DD-substack.html` | Substack 格式 HTML，每次运行生成 |
-| `$OBSIDIAN_VAULT_PATH/YYYY-MM-DD-daily-news.md` | Obsidian Markdown（配置后生成） |
+| `$OBSIDIAN_VAULT_PATH/YYYY-MM/YYYY-MM-DD-daily-news.md` | Obsidian Markdown（配置后生成） |
 | `data/state.json` | 已成功走完整理并发布到本地输出的最近发布时间游标，用于增量采集 |
 | `data/pending-draft.json` | 采集成功但尚未走完整个发布链路的暂存草稿 |
 
