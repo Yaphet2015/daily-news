@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "generate": "tsx src/generate.ts",
+    "generate": "node --import tsx src/generate.ts",
+    "generate:review": "node --import tsx src/generate.ts --mode=review",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {

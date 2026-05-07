@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runGenerate } from '../src/generate.js';
-import type { CollectionSnapshot, PendingDraft } from '../src/types.js';
+import type { CollectionSnapshot, CuratedItem, PendingDraft, ReviewPacket } from '../src/types.js';
 
 function createSnapshot(overrides: Partial<CollectionSnapshot> = {}): CollectionSnapshot {
   return {
@@ -22,11 +22,39 @@ function createSnapshot(overrides: Partial<CollectionSnapshot> = {}): Collection
   };
 }
 
+function createCollectedItem(overrides: Partial<CollectionSnapshot['items'][number]> = {}): CollectionSnapshot['items'][number] {
+  return {
+    id: 'tw-1',
+    source: 'twitter',
+    text: 'tweet',
+    publishedAt: '2026-03-15T00:00:00Z',
+    url: 'https://x.com/alice/status/1',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    ...overrides,
+  };
+}
+
 function createDraft(overrides: Partial<PendingDraft> = {}): PendingDraft {
   return {
     collectedAt: 1710000000,
     enabledSources: ['twitter'],
     items: createSnapshot().items,
+    ...overrides,
+  };
+}
+
+function createCuratedItem(overrides: Partial<CuratedItem> = {}): CuratedItem {
+  return {
+    id: 'tw-1',
+    title: 'Launch',
+    summary: 'Summary',
+    url: 'https://x.com/alice/status/1',
+    author: 'Alice',
+    attribution: '@alice',
+    source: 'twitter',
+    category: 'Product',
+    media: [],
     ...overrides,
   };
 }
@@ -451,4 +479,374 @@ test('runGenerate always passes forced roundup entries into curate even when the
   });
 
   assert.deepEqual(curateInputs, [['tw-1', 'ss-roundup-1']]);
+});
+
+test('runGenerate review mode appends fresh items into an existing pending draft before review', async () => {
+  const events: string[] = [];
+  const reviewPackets: ReviewPacket[] = [];
+  const writtenDrafts: PendingDraft[] = [];
+  const collectStates: number[] = [];
+
+  await runGenerate(
+    {
+      readDraft: async () =>
+        createDraft({
+          collectedAt: 1710000000,
+          enabledSources: ['twitter'],
+          items: [
+            createCollectedItem({
+              id: 'tw-old',
+              publishedAt: '2026-03-15T00:00:00Z',
+              url: 'https://x.com/alice/status/old',
+            }),
+            createCollectedItem({
+              id: 'tw-duplicate-url',
+              publishedAt: '2026-03-14T00:00:00Z',
+              url: 'https://example.com/same',
+            }),
+          ],
+        }),
+      choosePendingDraftAction: async () => {
+        events.push('prompt');
+        return 'cancel';
+      },
+      collect: async (state) => {
+        events.push('collect');
+        collectStates.push(state.sources.twitter.lastPublishedTime, state.sources.substack.lastPublishedTime);
+        return createSnapshot({
+          collectedAt: 1710100000,
+          enabledSources: ['twitter', 'substack'],
+          items: [
+            createCollectedItem({
+              id: 'tw-new',
+              publishedAt: '2026-03-16T00:00:00Z',
+              url: 'https://x.com/alice/status/new',
+            }),
+            createCollectedItem({
+              id: 'tw-old',
+              publishedAt: '2026-03-16T01:00:00Z',
+              url: 'https://x.com/alice/status/old-updated',
+            }),
+            createCollectedItem({
+              id: 'tw-fresh-duplicate-url',
+              publishedAt: '2026-03-16T02:00:00Z',
+              url: 'https://example.com/same',
+            }),
+          ],
+        });
+      },
+      writeDraft: async (draft) => {
+        events.push(`writeDraft:${draft.collectedAt}:${draft.items.map((item) => item.id).join(',')}`);
+        writtenDrafts.push(draft);
+      },
+      clearDraft: async () => {
+        events.push('clearDraft');
+      },
+      readState: async () => ({
+        sources: {
+          twitter: { lastPublishedTime: 100 },
+          substack: { lastPublishedTime: 0 },
+        },
+      }),
+      writeState: async () => {
+        events.push('writeState');
+      },
+      attachReaderBriefs: async (items) => {
+        events.push(`attach:${items.map((item) => item.id).join(',')}`);
+        return items;
+      },
+      rankItems: (items) => {
+        events.push(`rank:${items.length}`);
+        return items as never;
+      },
+      selectCandidatePool: (items) => {
+        events.push(`pool:${items.length}`);
+        return items as never;
+      },
+      curate: async () => {
+        events.push('curate');
+        return [createCuratedItem()];
+      },
+      select: async () => {
+        events.push('select');
+        return [];
+      },
+      format: (items, date) => {
+        events.push(`format:${date}:${items.length}`);
+        return { date, obsidian: 'obsidian', substack: 'substack' };
+      },
+      publish: async () => {
+        events.push('publish');
+      },
+      writeReviewPacket: async (packet) => {
+        events.push(`review:${packet.date}:${packet.curatedItems.length}`);
+        reviewPackets.push(packet);
+        return {
+          jsonPath: '/tmp/2024-03-09-review.json',
+          markdownPath: '/tmp/2024-03-09-review.md',
+        };
+      },
+      log: () => {},
+    },
+    { mode: 'review' },
+  );
+
+  assert.deepEqual(collectStates, [1710000000, 1710000000]);
+  assert.deepEqual(events, [
+    'collect',
+    'writeDraft:1710100000:tw-new,tw-old,tw-duplicate-url',
+    'attach:tw-new,tw-old,tw-duplicate-url',
+    'rank:3',
+    'pool:3',
+    'curate',
+    'review:2024-03-10:1',
+  ]);
+  assert.deepEqual(writtenDrafts[0]?.enabledSources, ['twitter', 'substack']);
+  assert.equal(reviewPackets[0]?.nextAction, 'Run `npm run generate`, choose `resume`, then select the final items.');
+});
+
+test('runGenerate review mode reviews an existing draft without rewriting it when no fresh items are collected', async () => {
+  const events: string[] = [];
+
+  await runGenerate(
+    {
+      readDraft: async () => createDraft(),
+      collect: async () => {
+        events.push('collect');
+        return createSnapshot({ collectedAt: 1710100000, items: [] });
+      },
+      writeDraft: async () => {
+        events.push('writeDraft');
+      },
+      clearDraft: async () => {
+        events.push('clearDraft');
+      },
+      readState: async () => ({
+        sources: {
+          twitter: { lastPublishedTime: 100 },
+          substack: { lastPublishedTime: 0 },
+        },
+      }),
+      writeState: async () => {
+        events.push('writeState');
+      },
+      attachReaderBriefs: async (items) => {
+        events.push(`attach:${items.length}`);
+        return items;
+      },
+      rankItems: (items) => {
+        events.push(`rank:${items.length}`);
+        return items as never;
+      },
+      selectCandidatePool: (items) => {
+        events.push(`pool:${items.length}`);
+        return items as never;
+      },
+      curate: async () => {
+        events.push('curate');
+        return [createCuratedItem()];
+      },
+      select: async () => {
+        events.push('select');
+        return [];
+      },
+      format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+      publish: async () => {
+        events.push('publish');
+      },
+      writeReviewPacket: async (packet) => {
+        events.push(`review:${packet.date}`);
+        return {
+          jsonPath: '/tmp/2024-03-09-review.json',
+          markdownPath: '/tmp/2024-03-09-review.md',
+        };
+      },
+      log: () => {},
+    },
+    { mode: 'review' },
+  );
+
+  assert.deepEqual(events, ['collect', 'attach:1', 'rank:1', 'pool:1', 'curate', 'review:2024-03-09']);
+});
+
+test('runGenerate review mode preserves an existing draft when fresh collection fails', async () => {
+  const events: string[] = [];
+
+  await assert.rejects(
+    () =>
+      runGenerate(
+        {
+          readDraft: async () => createDraft(),
+          collect: async () => {
+            events.push('collect');
+            throw new Error('collect failed');
+          },
+          writeDraft: async () => {
+            events.push('writeDraft');
+          },
+          clearDraft: async () => {
+            events.push('clearDraft');
+          },
+          readState: async () => ({
+            sources: {
+              twitter: { lastPublishedTime: 100 },
+              substack: { lastPublishedTime: 0 },
+            },
+          }),
+          writeState: async () => {
+            events.push('writeState');
+          },
+          attachReaderBriefs: async () => {
+            events.push('attach');
+            return [];
+          },
+          rankItems: (items) => items as never,
+          selectCandidatePool: (items) => items as never,
+          curate: async () => [],
+          select: async (items) => items,
+          format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+          publish: async () => {
+            events.push('publish');
+          },
+          writeReviewPacket: async () => {
+            events.push('review');
+            return {
+              jsonPath: '/tmp/2024-03-09-review.json',
+              markdownPath: '/tmp/2024-03-09-review.md',
+            };
+          },
+          log: () => {},
+        },
+        { mode: 'review' },
+      ),
+    /collect failed/,
+  );
+
+  assert.deepEqual(events, ['collect']);
+});
+
+test('runGenerate review mode writes a fresh pending draft and leaves it for interactive resume', async () => {
+  const events: string[] = [];
+
+  await runGenerate(
+    {
+      readDraft: async () => null,
+      collect: async () => {
+        events.push('collect');
+        return createSnapshot({ collectedAt: 1710100000 });
+      },
+      writeDraft: async (draft) => {
+        events.push(`writeDraft:${draft.collectedAt}`);
+      },
+      clearDraft: async () => {
+        events.push('clearDraft');
+      },
+      readState: async () => ({
+        sources: {
+          twitter: { lastPublishedTime: 100 },
+          substack: { lastPublishedTime: 0 },
+        },
+      }),
+      writeState: async () => {
+        events.push('writeState');
+      },
+      attachReaderBriefs: async (items) => items,
+      rankItems: (items) => items as never,
+      selectCandidatePool: (items) => items as never,
+      curate: async () => [createCuratedItem()],
+      select: async () => {
+        events.push('select');
+        return [];
+      },
+      format: (items, date) => {
+        events.push(`format:${date}:${items.length}`);
+        return { date, obsidian: 'obsidian', substack: 'substack' };
+      },
+      publish: async () => {
+        events.push('publish');
+      },
+      writeReviewPacket: async (packet) => {
+        events.push(`review:${packet.collectedAt}`);
+        return {
+          jsonPath: '/tmp/2024-03-10-review.json',
+          markdownPath: '/tmp/2024-03-10-review.md',
+        };
+      },
+      log: () => {},
+    },
+    { mode: 'review' },
+  );
+
+  assert.deepEqual(events, ['collect', 'writeDraft:1710100000', 'review:1710100000']);
+});
+
+test('runGenerate review mode preserves draft and state when curation fails', async () => {
+  const events: string[] = [];
+  const writtenDrafts: PendingDraft[] = [];
+
+  await assert.rejects(
+    () =>
+      runGenerate(
+        {
+          readDraft: async () => createDraft(),
+          collect: async () => {
+            events.push('collect');
+            return createSnapshot({
+              collectedAt: 1710100000,
+              items: [
+                createCollectedItem({
+                  id: 'tw-2',
+                  publishedAt: '2026-03-16T00:00:00Z',
+                  url: 'https://x.com/alice/status/2',
+                }),
+              ],
+            });
+          },
+          writeDraft: async (draft) => {
+            events.push('writeDraft');
+            writtenDrafts.push(draft);
+          },
+          clearDraft: async () => {
+            events.push('clearDraft');
+          },
+          readState: async () => ({
+            sources: {
+              twitter: { lastPublishedTime: 100 },
+              substack: { lastPublishedTime: 0 },
+            },
+          }),
+          writeState: async () => {
+            events.push('writeState');
+          },
+          attachReaderBriefs: async (items) => items,
+          rankItems: (items) => items as never,
+          selectCandidatePool: (items) => items as never,
+          curate: async () => {
+            events.push('curate');
+            throw new Error('main_curate failed');
+          },
+          select: async () => {
+            events.push('select');
+            return [];
+          },
+          format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+          publish: async () => {
+            events.push('publish');
+          },
+          writeReviewPacket: async () => {
+            events.push('review');
+            return {
+              jsonPath: '/tmp/2024-03-09-review.json',
+              markdownPath: '/tmp/2024-03-09-review.md',
+            };
+          },
+          log: () => {},
+        },
+        { mode: 'review' },
+      ),
+    /main_curate failed/,
+  );
+
+  assert.deepEqual(events, ['collect', 'writeDraft', 'curate']);
+  assert.deepEqual(writtenDrafts[0]?.items.map((item) => item.id), ['tw-2', 'tw-1']);
 });

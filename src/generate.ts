@@ -7,6 +7,7 @@ import { clearPendingDraft, readPendingDraft, writePendingDraft } from './draft.
 import { format, formatDateFromUnixSeconds } from './format.js';
 import { publish } from './publish.js';
 import { rankItems, selectCandidatePool } from './rank.js';
+import { writeReviewPacket } from './review.js';
 import { select } from './select.js';
 import { readState, writeState } from './state.js';
 import type {
@@ -14,11 +15,19 @@ import type {
   CollectedItem,
   CuratedItem,
   PendingDraft,
+  RankedItem,
+  ReviewPacket,
+  ReviewPacketPaths,
   RunState,
   SelectionReport,
 } from './types.js';
 
 type PendingDraftAction = 'resume' | 'discard' | 'cancel';
+type GenerateMode = 'interactive' | 'review';
+
+interface RunGenerateOptions {
+  mode?: GenerateMode;
+}
 
 interface GenerateDeps {
   readState: () => Promise<RunState>;
@@ -35,6 +44,7 @@ interface GenerateDeps {
   select: (items: CuratedItem[]) => Promise<CuratedItem[]>;
   format: typeof format;
   publish: (result: ReturnType<typeof format>, report?: SelectionReport) => Promise<void>;
+  writeReviewPacket: (packet: ReviewPacket) => Promise<ReviewPacketPaths>;
   log: (message: string) => void;
 }
 
@@ -63,6 +73,7 @@ function createGenerateDeps(): GenerateDeps {
     select,
     format,
     publish,
+    writeReviewPacket,
     log: console.log,
   };
 }
@@ -84,6 +95,47 @@ function advancePublishedState(state: RunState, sources: string[], collectedAt: 
   return nextState;
 }
 
+function createAppendCollectionState(draft: PendingDraft): RunState {
+  return {
+    sources: {
+      twitter: { lastPublishedTime: draft.collectedAt },
+      substack: { lastPublishedTime: draft.collectedAt },
+    },
+  };
+}
+
+function getItemTimestamp(item: CollectedItem): number {
+  const timestamp = Date.parse(item.publishedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getSourceUrlKey(item: CollectedItem): string {
+  return `${item.source}:${item.url.trim().toLowerCase()}`;
+}
+
+function mergePendingDraftWithFreshSnapshot(draft: PendingDraft, freshSnapshot: CollectionSnapshot): PendingDraft {
+  const items: CollectedItem[] = [];
+  const seenIds = new Set<string>();
+  const seenSourceUrls = new Set<string>();
+
+  for (const item of [...draft.items, ...freshSnapshot.items]) {
+    const sourceUrlKey = getSourceUrlKey(item);
+    if (seenIds.has(item.id) || seenSourceUrls.has(sourceUrlKey)) continue;
+
+    seenIds.add(item.id);
+    seenSourceUrls.add(sourceUrlKey);
+    items.push(item);
+  }
+
+  items.sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
+
+  return {
+    collectedAt: freshSnapshot.collectedAt,
+    enabledSources: Array.from(new Set([...draft.enabledSources, ...freshSnapshot.enabledSources])),
+    items,
+  };
+}
+
 function mergeForcedSelectItems(candidateItems: CollectedItem[], rankedItems: CollectedItem[]): CollectedItem[] {
   const merged = [...candidateItems];
   const seen = new Set(candidateItems.map((item) => item.id));
@@ -97,8 +149,80 @@ function mergeForcedSelectItems(candidateItems: CollectedItem[], rankedItems: Co
   return merged;
 }
 
-export async function runGenerate(overrides: Partial<GenerateDeps> = {}): Promise<void> {
+const REVIEW_NEXT_ACTION = 'Run `npm run generate`, choose `resume`, then select the final items.';
+
+function annotateRankedItems(
+  rankedItems: RankedItem[],
+  candidateItems: CollectedItem[],
+  curatedItems: CuratedItem[],
+  selectedItems?: CuratedItem[],
+): RankedItem[] {
+  const candidateIds = new Set(candidateItems.map((item) => item.id));
+  const curatedIds = new Set(curatedItems.map((item) => item.id));
+  const selectedIds = selectedItems ? new Set(selectedItems.map((item) => item.id)) : null;
+
+  return rankedItems.map((item) => {
+    const annotated: RankedItem = {
+      ...item,
+      enteredCandidatePool: candidateIds.has(item.id),
+      selectedByLlm: curatedIds.has(item.id),
+    };
+
+    if (selectedIds) {
+      annotated.selectedByHuman = selectedIds.has(item.id);
+    }
+
+    return annotated;
+  });
+}
+
+function buildSelectionReport(
+  date: string,
+  rankedItems: RankedItem[],
+  candidateItems: CollectedItem[],
+  curatedItems: CuratedItem[],
+  selectedItems: CuratedItem[],
+): SelectionReport {
+  return {
+    date,
+    rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems, selectedItems),
+    curatedItems,
+    selectedItems,
+  };
+}
+
+function buildReviewPacket(
+  snapshot: PendingDraft | CollectionSnapshot,
+  rankedItems: RankedItem[],
+  candidateItems: CollectedItem[],
+  curatedItems: CuratedItem[],
+): ReviewPacket {
+  return {
+    date: formatDateFromUnixSeconds(snapshot.collectedAt),
+    collectedAt: snapshot.collectedAt,
+    enabledSources: snapshot.enabledSources,
+    rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems),
+    curatedItems,
+    nextAction: REVIEW_NEXT_ACTION,
+  };
+}
+
+export function parseGenerateMode(args: string[]): GenerateMode {
+  const modeArg = args.find((arg) => arg.startsWith('--mode='));
+  if (!modeArg) return 'interactive';
+
+  const mode = modeArg.slice('--mode='.length);
+  if (mode === 'interactive' || mode === 'review') return mode;
+
+  throw new Error(`Unsupported generate mode: ${mode}`);
+}
+
+export async function runGenerate(
+  overrides: Partial<GenerateDeps> = {},
+  options: RunGenerateOptions = {},
+): Promise<void> {
   const deps = { ...createGenerateDeps(), ...overrides };
+  const mode = options.mode ?? 'interactive';
 
   console.log('═══════════════════════════════════════════════════════════');
   console.log(' AI daily-news');
@@ -109,17 +233,29 @@ export async function runGenerate(overrides: Partial<GenerateDeps> = {}): Promis
   let snapshot: PendingDraft | CollectionSnapshot | null = null;
 
   if (existingDraft) {
-    const action = await deps.choosePendingDraftAction(existingDraft);
-    if (action === 'cancel') {
-      deps.log('本次运行已取消。');
-      return;
-    }
-
-    if (action === 'resume') {
-      deps.log(`[generate] 继续处理历史草稿，共 ${existingDraft.items.length} 条内容`);
-      snapshot = existingDraft;
+    if (mode === 'review') {
+      const freshSnapshot = await deps.collect(createAppendCollectionState(existingDraft));
+      if (freshSnapshot.items.length > 0) {
+        snapshot = mergePendingDraftWithFreshSnapshot(existingDraft, freshSnapshot);
+        await deps.writeDraft(snapshot);
+        deps.log(`[generate:review] 已追加 ${freshSnapshot.items.length} 条新内容，合并后共 ${snapshot.items.length} 条内容`);
+      } else {
+        deps.log('[generate:review] 没有采集到可追加的新内容，继续审阅历史草稿');
+        snapshot = existingDraft;
+      }
     } else {
-      await deps.clearDraft();
+      const action = await deps.choosePendingDraftAction(existingDraft);
+      if (action === 'cancel') {
+        deps.log('本次运行已取消。');
+        return;
+      }
+
+      if (action === 'resume') {
+        deps.log(`[generate] 继续处理历史草稿，共 ${existingDraft.items.length} 条内容`);
+        snapshot = existingDraft;
+      } else {
+        await deps.clearDraft();
+      }
     }
   }
 
@@ -143,23 +279,18 @@ export async function runGenerate(overrides: Partial<GenerateDeps> = {}): Promis
     return;
   }
 
+  if (mode === 'review') {
+    const packet = buildReviewPacket(snapshot, rankedItems, candidateItems, curatedItems);
+    const paths = await deps.writeReviewPacket(packet);
+    deps.log(`[generate:review] Review JSON 已保存: ${paths.jsonPath}`);
+    deps.log(`[generate:review] Review Markdown 已保存: ${paths.markdownPath}`);
+    deps.log(`[generate:review] 下一步: ${REVIEW_NEXT_ACTION}`);
+    return;
+  }
+
   const selectedItems = await deps.select(curatedItems);
   const formatted = deps.format(selectedItems, formatDateFromUnixSeconds(snapshot.collectedAt));
-
-  const candidateIds = new Set(candidateItems.map((item) => item.id));
-  const curatedIds = new Set(curatedItems.map((item) => item.id));
-  const selectedIds = new Set(selectedItems.map((item) => item.id));
-  const report: SelectionReport = {
-    date: formatted.date,
-    rankedItems: rankedItems.map((item) => ({
-      ...item,
-      enteredCandidatePool: candidateIds.has(item.id),
-      selectedByLlm: curatedIds.has(item.id),
-      selectedByHuman: selectedIds.has(item.id),
-    })),
-    curatedItems,
-    selectedItems,
-  };
+  const report = buildSelectionReport(formatted.date, rankedItems, candidateItems, curatedItems, selectedItems);
 
   await deps.publish(formatted, report);
   await deps.writeState(advancePublishedState(publishedState, snapshot.enabledSources, snapshot.collectedAt));
@@ -169,7 +300,7 @@ export async function runGenerate(overrides: Partial<GenerateDeps> = {}): Promis
 }
 
 async function main(): Promise<void> {
-  await runGenerate();
+  await runGenerate({}, { mode: parseGenerateMode(process.argv.slice(2)) });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -157,6 +157,20 @@ export interface SelectionReport {
   selectedItems: CuratedItem[];
 }
 
+export interface ReviewPacket {
+  date: string;
+  collectedAt: number;
+  enabledSources: SourceName[];
+  rankedItems: RankedItem[];
+  curatedItems: CuratedItem[];
+  nextAction: string;
+}
+
+export interface ReviewPacketPaths {
+  jsonPath: string;
+  markdownPath: string;
+}
+
 export interface SourceRunState {
   lastPublishedTime: number;
 }

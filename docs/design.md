@@ -1,7 +1,7 @@
 
 我希望复刻一个 [modelwatch.dev](https://modelwatch.dev/) 这样的日刊系统。
 
-背后是一套打磨过的 workflow，基于 ai。每天跑下 npm run generate，然后等着 ai 从 200+ 到 500 条 twitter 中整理出 40-50 条资讯，我人工选 6-10 条，然后按回车发布。
+背后是一套打磨过的 workflow，基于 ai。日常人工发布时跑 `npm run generate`，等着 ai 从 200+ 到 500 条 twitter 中整理出 40-50 条资讯，我人工选 6-10 条，然后按回车发布。自动化场景先跑 `npm run generate:review`，每天 09:00 由 Codex 准备 review 包并保留 pending draft；如果已有 pending draft，先追加 fresh 内容并合并成一份新草稿。真正发布时仍回到 `npm run generate`，选择 resume 后人工复选。
 
 说下怎么实现的。
 

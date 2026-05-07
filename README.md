@@ -16,6 +16,13 @@ npm run generate
     ├─ 6. 复选  → 终端交互，人工勾选 6-10 条
     ├─ 7. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
     └─ 8. 发布  → 保存到 Obsidian Vault / output/ 目录
+
+npm run generate:review
+    │
+    ├─ 若已有 pending draft，先采集 fresh 内容并合并成一份新草稿
+    ├─ 跑完预读 / 排序 / AI 整理
+    ├─ 写入 output/YYYY-MM-DD-review.json + output/YYYY-MM-DD-review.md
+    └─ 保留 pending draft，不复选、不发布、不推进 state.json
 ```
 
 ## 快速开始
@@ -39,6 +46,16 @@ cp .env.example .env
 ```bash
 npm run generate
 ```
+
+交互发布仍然走 `npm run generate`。如果要交给 Codex 自动化先准备审阅材料，使用：
+
+```bash
+npm run generate:review
+```
+
+`generate:review` 是非交互模式：发现 `data/pending-draft.json` 时会用这份草稿的采集时间作为临时游标继续采集 fresh 内容，并把新旧条目去重合并回同一份草稿；没有草稿时会重新采集并先写入草稿。它只生成审阅包，不会进入 checkbox 复选、不会写 Obsidian/Substack 发布产物、不会推进 `data/state.json`，也不会清空草稿。审阅后继续发布时，再运行 `npm run generate`，选择 `resume`，然后人工勾选最终条目。
+
+当前 Codex 自动化建议配置为每天 Asia/Singapore 时间 09:00 运行 `npm run generate:review`，并在结果里汇报审阅包路径与失败阶段。
 
 ---
 
@@ -148,6 +165,8 @@ output/YYYY-MM-DD-substack.html
 | 路径 | 说明 |
 |------|------|
 | `output/YYYY-MM-DD-substack.html` | Substack 格式 HTML，每次运行生成 |
+| `output/YYYY-MM-DD-review.json` | 非交互审阅包，包含采集时间、来源、排序元数据、AI 整理结果和下一步命令 |
+| `output/YYYY-MM-DD-review.md` | 面向人工和 Codex 摘要的审阅版 Markdown |
 | `$OBSIDIAN_VAULT_PATH/YYYY-MM/YYYY-MM-DD-daily-news.md` | Obsidian Markdown（配置后生成） |
 | `data/state.json` | 已成功走完整理并发布到本地输出的最近发布时间游标，用于增量采集 |
 | `data/pending-draft.json` | 采集成功但尚未走完整个发布链路的暂存草稿 |
@@ -168,6 +187,7 @@ output/YYYY-MM-DD-substack.html
 - **按来源增量采集**：每个来源都会用 `data/state.json` 中记录的最近一次成功发布采集时间作为增量游标；首次运行默认各自回溯 24 小时
 - **可恢复草稿**：只要采集成功，就会先把原始采集结果写入 `data/pending-draft.json`。如果后续 Substack 预读、AI 整理、人工复选或本地发布阶段失败，下次运行会先提示是继续发布这份历史草稿、丢弃后重新采集，还是直接取消
 - **发布游标 SSOT**：`data/state.json` 只在本地发布阶段成功结束后才推进，记录每个来源最近一次成功发布到本地产物的采集时间；单纯采集成功不会推进这个游标，避免分析失败后丢稿
+- **自动化审阅模式**：`npm run generate:review` 复用同一条采集、预读、排序和 AI 整理链路，但停止在人工复选前。已有 pending draft 时，它会先从草稿采集时间继续采集 fresh 内容，按条目 ID 和来源 URL 去重合并后再写回同一份草稿；发布游标仍不推进，方便后续交互发布从合并后的采集结果继续
 - **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
 - **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，并与仓库内 pinned publications 合并，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
@@ -179,6 +199,7 @@ output/YYYY-MM-DD-substack.html
 - **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认；每个候选项会显示来源、评分提示和最多 3 行摘要预览，便于人工决策
+- **审阅包**：自动化模式会额外写出 `output/<date>-review.json` 和 `output/<date>-review.md`，供定时任务汇报和人工预读；如果跳过一天，下一次 09:00 review 会先追加新内容到同一份 pending draft。v1 不做隐藏自动精选，最终 6-10 条仍由人工复选决定
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
 - **固定分组**：发布输出按 `Product`、`Tutorial`、`Opinions/Thoughts` 三组组织，不再展示条目标签
 - **决策可追踪**：每次运行会额外写出 `output/<date>-selection-report.json`，记录分数、候选池、AI 入选和人工入选状态
@@ -199,6 +220,7 @@ daily-news/
 │   ├── select.ts      # 交互式人工复选
 │   ├── format.ts      # Obsidian + Substack 格式化
 │   ├── publish.ts     # 输出保存
+│   ├── review.ts      # 非交互审阅包输出
 │   ├── state.ts       # 已发布游标状态持久化
 │   └── types.ts       # 共享类型定义
 ├── prompts/
