@@ -57,6 +57,14 @@ npm run generate:review
 
 当前 Codex 自动化建议配置为每天 Asia/Singapore 时间 09:00 运行 `npm run generate:review`，并在结果里汇报审阅包路径与失败阶段。
 
+如果要确认自动化环境是否和手动终端一致，先运行：
+
+```bash
+npm run generate:review:diagnose
+```
+
+该命令会在同一个 Node 入口里打印运行时指纹（cwd、父进程、PATH、代理变量、`node/npm/twitter/curl` 路径、draft/state 文件状态），并用真实的 child-process 路径执行 `twitter list --max 5 --json` 和代理 `curl` 检查；它不会进入 AI 整理、复选或发布。
+
 ---
 
 ## 环境变量说明

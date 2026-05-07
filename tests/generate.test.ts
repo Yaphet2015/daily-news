@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runGenerate } from '../src/generate.js';
+import { parseGenerateOptions, runGenerate } from '../src/generate.js';
 import type { CollectionSnapshot, CuratedItem, PendingDraft, ReviewPacket } from '../src/types.js';
 
 function createSnapshot(overrides: Partial<CollectionSnapshot> = {}): CollectionSnapshot {
@@ -130,6 +130,42 @@ test('runGenerate resumes an existing pending draft without recollecting and cle
     'writeState:1710000000',
     'clearDraft',
   ]);
+});
+
+test('parseGenerateOptions detects review diagnose mode without changing review mode parsing', () => {
+  assert.deepEqual(parseGenerateOptions(['--mode=review', '--diagnose-collect-env']), {
+    mode: 'review',
+    diagnoseCollectEnv: true,
+  });
+});
+
+test('runGenerate logs environment diagnostics and exits before normal flow in collect diagnose mode', async () => {
+  const events: string[] = [];
+
+  await runGenerate(
+    {
+      shouldLogEnvironmentDiagnostics: () => true,
+      logEnvironmentDiagnostics: async () => {
+        events.push('env');
+      },
+      diagnoseCollectEnvironment: async () => {
+        events.push('diagnose');
+      },
+      readState: async () => {
+        events.push('readState');
+        return {
+          sources: {
+            twitter: { lastPublishedTime: 100 },
+            substack: { lastPublishedTime: 0 },
+          },
+        };
+      },
+      log: () => {},
+    },
+    { mode: 'review', diagnoseCollectEnv: true },
+  );
+
+  assert.deepEqual(events, ['env', 'diagnose']);
 });
 
 test('runGenerate writes a fresh pending draft before analysis and preserves it on downstream failure', async () => {

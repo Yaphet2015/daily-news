@@ -1,9 +1,13 @@
 import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
 import { select as promptSelect } from '@inquirer/prompts';
-import { collect } from './collect.js';
+import { collect, diagnoseCollectEnvironment } from './collect.js';
 import { attachReaderBriefs, curate } from './curate.js';
 import { clearPendingDraft, readPendingDraft, writePendingDraft } from './draft.js';
+import {
+  logEnvironmentDiagnostics,
+  shouldLogEnvironmentDiagnostics,
+} from './envDiagnostics.js';
 import { format, formatDateFromUnixSeconds } from './format.js';
 import { publish } from './publish.js';
 import { rankItems, selectCandidatePool } from './rank.js';
@@ -27,6 +31,7 @@ type GenerateMode = 'interactive' | 'review';
 
 interface RunGenerateOptions {
   mode?: GenerateMode;
+  diagnoseCollectEnv?: boolean;
 }
 
 interface GenerateDeps {
@@ -45,6 +50,9 @@ interface GenerateDeps {
   format: typeof format;
   publish: (result: ReturnType<typeof format>, report?: SelectionReport) => Promise<void>;
   writeReviewPacket: (packet: ReviewPacket) => Promise<ReviewPacketPaths>;
+  shouldLogEnvironmentDiagnostics: () => boolean;
+  logEnvironmentDiagnostics: () => Promise<void>;
+  diagnoseCollectEnvironment: () => Promise<void>;
   log: (message: string) => void;
 }
 
@@ -74,6 +82,9 @@ function createGenerateDeps(): GenerateDeps {
     format,
     publish,
     writeReviewPacket,
+    shouldLogEnvironmentDiagnostics,
+    logEnvironmentDiagnostics,
+    diagnoseCollectEnvironment,
     log: console.log,
   };
 }
@@ -217,6 +228,13 @@ export function parseGenerateMode(args: string[]): GenerateMode {
   throw new Error(`Unsupported generate mode: ${mode}`);
 }
 
+export function parseGenerateOptions(args: string[]): RunGenerateOptions {
+  return {
+    mode: parseGenerateMode(args),
+    diagnoseCollectEnv: args.includes('--diagnose-collect-env'),
+  };
+}
+
 export async function runGenerate(
   overrides: Partial<GenerateDeps> = {},
   options: RunGenerateOptions = {},
@@ -227,6 +245,15 @@ export async function runGenerate(
   console.log('═══════════════════════════════════════════════════════════');
   console.log(' AI daily-news');
   console.log('═══════════════════════════════════════════════════════════\n');
+
+  if (deps.shouldLogEnvironmentDiagnostics()) {
+    await deps.logEnvironmentDiagnostics();
+  }
+
+  if (options.diagnoseCollectEnv) {
+    await deps.diagnoseCollectEnvironment();
+    return;
+  }
 
   const publishedState = await deps.readState();
   const existingDraft = await deps.readDraft();
@@ -300,7 +327,7 @@ export async function runGenerate(
 }
 
 async function main(): Promise<void> {
-  await runGenerate({}, { mode: parseGenerateMode(process.argv.slice(2)) });
+  await runGenerate({}, parseGenerateOptions(process.argv.slice(2)));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

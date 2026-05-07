@@ -19,6 +19,8 @@ const execFileAsync = promisify(execFile);
 
 const TWITTER_API_BASE = 'https://api.twitterapi.io';
 const MAX_TWEETS = 500;
+const DIAGNOSTIC_TWEET_LIMIT = 5;
+const DEFAULT_TWITTER_LIST_ID = '2043983199311913431';
 const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
@@ -174,6 +176,13 @@ interface CollectSubstackItemsOptions {
     fetchPublicSubstackPublications?: typeof fetchPublicSubstackPublications;
     fetchPublicationFeed?: typeof fetchPublicationFeed;
   };
+}
+
+interface DiagnoseCollectEnvironmentDeps {
+  env?: NodeJS.ProcessEnv;
+  execFile?: (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+  execTwitterCliCommand?: typeof execTwitterCliCommand;
+  log?: (message: string) => void;
 }
 
 interface PublicSubstackFeed {
@@ -1030,6 +1039,10 @@ export function resolveHttpProxy(env: NodeJS.ProcessEnv = process.env): string |
   return readProxyEnvValue(env.HTTP_PROXY) ?? readProxyEnvValue(env.http_proxy);
 }
 
+function resolveTwitterListId(env: NodeJS.ProcessEnv = process.env): string {
+  return env.TWITTER_LIST_ID?.trim() || DEFAULT_TWITTER_LIST_ID;
+}
+
 export function buildSubstackCurlArgs(url: string, proxy: string | undefined): string[] {
   return [
     '-fsSL',
@@ -1058,6 +1071,65 @@ function buildTwitterReplyCommand(tweetId: string, maxReplies: number, proxy: st
 function buildTwitterCliEnvPrefix(proxy: string | undefined): string {
   if (!proxy) return '';
   return `TWITTER_PROXY=${proxy} HTTP_PROXY=${proxy} HTTPS_PROXY=${proxy} `;
+}
+
+function shouldLogCollectDiagnostics(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.DAILY_NEWS_ENV_DIAGNOSTICS?.trim().toLowerCase();
+  return value === '1' || value === 'true';
+}
+
+function writeCollectDiagnostic(log: (message: string) => void, message: string): void {
+  log(`[collect:diagnostics] ${message}`);
+}
+
+function logCollectDiagnostic(message: string): void {
+  if (shouldLogCollectDiagnostics()) {
+    writeCollectDiagnostic(console.log, message);
+  }
+}
+
+function firstDiagnosticLine(value: string): string {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? 'unknown error';
+}
+
+function summarizeDiagnosticError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return firstDiagnosticLine(message);
+}
+
+function redactProxyValue(value: string): string {
+  return value.replace(/\/\/([^/@:\s]+)(?::([^/@\s]*))?@/, '//***:***@');
+}
+
+export function redactCollectDiagnosticCommand(command: string): string {
+  return command
+    .replace(
+      /\b(TWITTER_PROXY|HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy|ALL_PROXY|all_proxy)=([^\s]+)/g,
+      (_match, key: string, value: string) => `${key}=${redactProxyValue(value)}`,
+    )
+    .replace(/\b(TWITTER_AUTH_TOKEN|TWITTER_CT0)=([^\s]+)/g, (_match, key: string) => `${key}=<redacted>`);
+}
+
+function redactCurlArgs(args: string[]): string[] {
+  return args.map((arg, index) => (args[index - 1] === '--proxy' ? redactProxyValue(arg) : arg));
+}
+
+function buildProxyCheckCurlArgs(proxy: string | undefined): string[] {
+  return [
+    '-fsSL',
+    '--compressed',
+    '--connect-timeout',
+    '10',
+    '--max-time',
+    '20',
+    ...(proxy ? ['--proxy', proxy] : []),
+    '-o',
+    '/dev/null',
+    'https://example.com',
+  ];
 }
 
 function buildGenericCurlArgs(url: string, proxy: string | undefined): string[] {
@@ -1542,12 +1614,20 @@ export function shouldFetchRepliesForPrimarySource(item: CollectedItem): boolean
 
 async function fetchSubstackText(url: string): Promise<string> {
   const proxy = resolveHttpProxy();
-  const { stdout } = await execFileAsync(
-    'curl',
-    buildSubstackCurlArgs(url, proxy),
-    { maxBuffer: 20 * 1024 * 1024 },
-  );
-  return stdout;
+  const args = buildSubstackCurlArgs(url, proxy);
+  logCollectDiagnostic(`substack proxy=${proxy ? redactProxyValue(proxy) : 'disabled'} command=curl ${redactCurlArgs(args).join(' ')}`);
+
+  try {
+    const { stdout } = await execFileAsync(
+      'curl',
+      args,
+      { maxBuffer: 20 * 1024 * 1024 },
+    );
+    return stdout;
+  } catch (error) {
+    logCollectDiagnostic(`substack error=${summarizeDiagnosticError(error)}`);
+    throw error;
+  }
 }
 
 async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
@@ -1785,6 +1865,7 @@ function warnSubstackFeedFailure(
 ): void {
   const proxy = resolveHttpProxy();
   const feedUrl = buildPublicationFeedUrl(publication);
+  logCollectDiagnostic(`substack publication="${publication.name}" error=${summarizeDiagnosticError(error)}`);
   console.warn(
     `[collect] 跳过 Substack publication feed: publication="${publication.name}" publicationUrl=${publication.url} feedUrl=${feedUrl} proxy=${proxy ?? 'disabled'} error=${summarizeError(error)}`,
   );
@@ -1793,11 +1874,19 @@ function warnSubstackFeedFailure(
 async function collectViaCli(listId: string, maxTweets: number): Promise<CollectedItem[]> {
   const proxy = resolveHttpProxy();
   console.log(`[collect] 使用 twitter-cli 采集`);
+  const command = buildTwitterCliCommand(listId, maxTweets, proxy);
+  logCollectDiagnostic(`twitter proxy=${proxy ? redactProxyValue(proxy) : 'disabled'} command=${redactCollectDiagnosticCommand(command)}`);
 
-  const { stdout, stderr } = await execTwitterCliCommand(
-    buildTwitterCliCommand(listId, maxTweets, proxy),
-    50 * 1024 * 1024,
-  );
+  let stdout: string;
+  let stderr: string;
+  try {
+    const result = await execTwitterCliCommand(command, 50 * 1024 * 1024);
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    logCollectDiagnostic(`twitter error=${summarizeDiagnosticError(error)}`);
+    throw error;
+  }
 
   if (stderr && !stderr.includes('Getting Twitter cookies')) {
     console.warn(`[collect] twitter-cli stderr: ${stderr}`);
@@ -2069,7 +2158,7 @@ export async function resolveTwitterPrimarySources(
 }
 
 async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> {
-  const listId = process.env.TWITTER_LIST_ID ?? '2043983199311913431';
+  const listId = resolveTwitterListId();
   console.log(
     `[collect] 采集 Twitter listId=${listId}，sinceTime=${new Date(sinceTime * 1000).toLocaleString('zh-CN')}`,
   );
@@ -2079,6 +2168,7 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
   try {
     items = await collectViaCli(listId, MAX_TWEETS);
   } catch (cliError) {
+    logCollectDiagnostic(`twitter-cli failed error=${summarizeDiagnosticError(cliError)}`);
     console.warn(`[collect] twitter-cli 失败: ${cliError}`);
     console.error(`❌ || cliError error`, cliError);
 
@@ -2302,6 +2392,47 @@ function parseEnabledSources(): SourceName[] {
     .filter((value): value is SourceName => value === 'twitter' || value === 'substack');
 
   return sources.length > 0 ? Array.from(new Set(sources)) : ['twitter'];
+}
+
+export async function diagnoseCollectEnvironment({
+  env = process.env,
+  execFile: runExecFile,
+  execTwitterCliCommand: runTwitterCliCommand = execTwitterCliCommand,
+  log = console.log,
+}: DiagnoseCollectEnvironmentDeps = {}): Promise<void> {
+  const proxy = resolveHttpProxy(env);
+  const listId = resolveTwitterListId(env);
+  const twitterCommand = buildTwitterCliCommand(listId, DIAGNOSTIC_TWEET_LIMIT, proxy);
+  writeCollectDiagnostic(
+    log,
+    `preflight twitter command=${redactCollectDiagnosticCommand(twitterCommand)}`,
+  );
+
+  try {
+    const { stdout, stderr } = await runTwitterCliCommand(twitterCommand, 5 * 1024 * 1024);
+    writeCollectDiagnostic(
+      log,
+      `preflight twitter ok stdoutBytes=${stdout.length} stderr=${stderr ? firstDiagnosticLine(stderr) : '<empty>'}`,
+    );
+  } catch (error) {
+    writeCollectDiagnostic(log, `preflight twitter failed error=${summarizeDiagnosticError(error)}`);
+  }
+
+  const curlArgs = buildProxyCheckCurlArgs(proxy);
+  writeCollectDiagnostic(log, `preflight curl command=curl ${redactCurlArgs(curlArgs).join(' ')}`);
+
+  try {
+    const execFileImpl =
+      runExecFile ??
+      (async (file: string, args: string[]) => {
+        const { stdout, stderr } = await execFileAsync(file, args, { maxBuffer: 1024 * 1024 });
+        return { stdout: String(stdout), stderr: String(stderr) };
+      });
+    await execFileImpl('curl', curlArgs);
+    writeCollectDiagnostic(log, 'preflight curl ok');
+  } catch (error) {
+    writeCollectDiagnostic(log, `preflight curl failed error=${summarizeDiagnosticError(error)}`);
+  }
 }
 
 export async function collect(

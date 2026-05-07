@@ -2,6 +2,46 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as collectModule from '../src/collect.js';
 
+test('redactCollectDiagnosticCommand hides proxy credentials and Twitter auth env values', () => {
+  assert.equal(
+    collectModule.redactCollectDiagnosticCommand(
+      'TWITTER_PROXY=http://user:pass@127.0.0.1:6152 HTTP_PROXY=http://user:pass@127.0.0.1:6152 TWITTER_AUTH_TOKEN=secret TWITTER_CT0=ct0 twitter list 123 --max 5 --json',
+    ),
+    'TWITTER_PROXY=http://***:***@127.0.0.1:6152 HTTP_PROXY=http://***:***@127.0.0.1:6152 TWITTER_AUTH_TOKEN=<redacted> TWITTER_CT0=<redacted> twitter list 123 --max 5 --json',
+  );
+});
+
+test('diagnoseCollectEnvironment logs real child-process checks without throwing on failures', async () => {
+  const logs: string[] = [];
+  const twitterCommands: string[] = [];
+  const curlCalls: Array<{ file: string; args: string[] }> = [];
+
+  await collectModule.diagnoseCollectEnvironment({
+    env: {
+      HTTP_PROXY: 'http://user:pass@127.0.0.1:6152',
+      TWITTER_LIST_ID: 'list-1',
+    },
+    execTwitterCliCommand: async (command) => {
+      twitterCommands.push(command);
+      throw new Error('No Twitter cookies found.\nmore details');
+    },
+    execFile: async (file, args) => {
+      curlCalls.push({ file, args });
+      throw new Error("curl: (7) Failed to connect to 127.0.0.1 port 6152");
+    },
+    log: (message) => logs.push(message),
+  });
+
+  assert.deepEqual(twitterCommands, [
+    'TWITTER_PROXY=http://user:pass@127.0.0.1:6152 HTTP_PROXY=http://user:pass@127.0.0.1:6152 HTTPS_PROXY=http://user:pass@127.0.0.1:6152 twitter list list-1 --max 5 --json',
+  ]);
+  assert.equal(curlCalls[0]?.file, 'curl');
+  assert.ok(curlCalls[0]?.args.includes('--proxy'));
+  assert.ok(logs.some((line) => line.includes('preflight twitter command=TWITTER_PROXY=http://***:***@127.0.0.1:6152')));
+  assert.ok(logs.some((line) => line.includes('preflight twitter failed error=No Twitter cookies found.')));
+  assert.ok(logs.some((line) => line.includes('preflight curl failed error=curl: (7) Failed to connect')));
+});
+
 test('mapTwitterCliTweet preserves empty media arrays', () => {
   const tweet = collectModule.mapTwitterCliTweet({
     id: '1',

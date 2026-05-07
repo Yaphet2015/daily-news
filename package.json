@@ -7,6 +7,7 @@
   "scripts": {
     "generate": "node --import tsx src/generate.ts",
     "generate:review": "node --import tsx src/generate.ts --mode=review",
+    "generate:review:diagnose": "DAILY_NEWS_ENV_DIAGNOSTICS=1 node --import tsx src/generate.ts --mode=review --diagnose-collect-env",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
