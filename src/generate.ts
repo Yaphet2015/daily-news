@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
 import { select as promptSelect } from '@inquirer/prompts';
 import { collect, diagnoseCollectEnvironment } from './collect.js';
-import { attachReaderBriefs, curate } from './curate.js';
+import { attachReaderBriefs, curateWithDiagnostics } from './curate.js';
 import { clearPendingDraft, readPendingDraft, writePendingDraft } from './draft.js';
 import {
   logEnvironmentDiagnostics,
@@ -17,7 +17,9 @@ import { readState, writeState } from './state.js';
 import type {
   CollectionSnapshot,
   CollectedItem,
+  CurateResult,
   CuratedItem,
+  CurationDiagnostics,
   PendingDraft,
   RankedItem,
   ReviewPacket,
@@ -45,7 +47,7 @@ interface GenerateDeps {
   attachReaderBriefs: (items: CollectedItem[]) => Promise<CollectedItem[]>;
   rankItems: typeof rankItems;
   selectCandidatePool: typeof selectCandidatePool;
-  curate: (items: CollectedItem[]) => Promise<CuratedItem[]>;
+  curate: (items: CollectedItem[]) => Promise<CuratedItem[] | CurateResult>;
   select: (items: CuratedItem[]) => Promise<CuratedItem[]>;
   format: typeof format;
   publish: (result: ReturnType<typeof format>, report?: SelectionReport) => Promise<void>;
@@ -77,7 +79,7 @@ function createGenerateDeps(): GenerateDeps {
     attachReaderBriefs,
     rankItems,
     selectCandidatePool,
-    curate,
+    curate: curateWithDiagnostics,
     select,
     format,
     publish,
@@ -187,15 +189,25 @@ function annotateRankedItems(
   });
 }
 
+function normalizeCurateResult(result: CuratedItem[] | CurateResult): { items: CuratedItem[]; diagnostics?: CurationDiagnostics } {
+  if (Array.isArray(result)) {
+    return { items: result };
+  }
+
+  return result;
+}
+
 function buildSelectionReport(
   date: string,
   rankedItems: RankedItem[],
   candidateItems: CollectedItem[],
   curatedItems: CuratedItem[],
   selectedItems: CuratedItem[],
+  curationDiagnostics?: CurationDiagnostics,
 ): SelectionReport {
   return {
     date,
+    curationDiagnostics,
     rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems, selectedItems),
     curatedItems,
     selectedItems,
@@ -207,6 +219,7 @@ function buildReviewPacket(
   rankedItems: RankedItem[],
   candidateItems: CollectedItem[],
   curatedItems: CuratedItem[],
+  curationDiagnostics?: CurationDiagnostics,
 ): ReviewPacket {
   return {
     date: formatDateFromUnixSeconds(snapshot.collectedAt),
@@ -214,6 +227,7 @@ function buildReviewPacket(
     enabledSources: snapshot.enabledSources,
     rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems),
     curatedItems,
+    curationDiagnostics,
     nextAction: REVIEW_NEXT_ACTION,
   };
 }
@@ -300,14 +314,15 @@ export async function runGenerate(
   const rankedItems = deps.rankItems(enrichedCollectedItems);
   const candidateItems = deps.selectCandidatePool(rankedItems);
   const curatedInputItems = mergeForcedSelectItems(candidateItems, rankedItems);
-  const curatedItems = await deps.curate(curatedInputItems);
+  const curateResult = normalizeCurateResult(await deps.curate(curatedInputItems));
+  const curatedItems = curateResult.items;
   if (curatedItems.length === 0) {
     deps.log('AI 未整理出任何资讯，本次运行结束。');
     return;
   }
 
   if (mode === 'review') {
-    const packet = buildReviewPacket(snapshot, rankedItems, candidateItems, curatedItems);
+    const packet = buildReviewPacket(snapshot, rankedItems, candidateItems, curatedItems, curateResult.diagnostics);
     const paths = await deps.writeReviewPacket(packet);
     deps.log(`[generate:review] Review JSON 已保存: ${paths.jsonPath}`);
     deps.log(`[generate:review] Review Markdown 已保存: ${paths.markdownPath}`);
@@ -317,7 +332,14 @@ export async function runGenerate(
 
   const selectedItems = await deps.select(curatedItems);
   const formatted = deps.format(selectedItems, formatDateFromUnixSeconds(snapshot.collectedAt));
-  const report = buildSelectionReport(formatted.date, rankedItems, candidateItems, curatedItems, selectedItems);
+  const report = buildSelectionReport(
+    formatted.date,
+    rankedItems,
+    candidateItems,
+    curatedItems,
+    selectedItems,
+    curateResult.diagnostics,
+  );
 
   await deps.publish(formatted, report);
   await deps.writeState(advancePublishedState(publishedState, snapshot.enabledSources, snapshot.collectedAt));

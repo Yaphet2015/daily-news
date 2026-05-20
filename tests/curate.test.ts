@@ -900,6 +900,252 @@ test('enrichCuratedItems preserves combined self-thread origin text and thread m
   ]);
 });
 
+test('enrichCuratedItemsWithDiagnostics accepts originUrl for a known wrapper item and canonicalizes to primary url', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).enrichCuratedItemsWithDiagnostics, 'function');
+
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: 'tw-wrapper',
+        title: 'Wrapper item',
+        summary: 'Wrapper summary',
+        url: 'https://x.com/alice/status/1',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'tw-wrapper',
+        source: 'twitter',
+        text: 'Launch wrapper',
+        originUrl: 'https://x.com/alice/status/1',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://docs.example.com/launch',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string; url: string }) => [item.id, item.url]), [
+    ['tw-wrapper', 'https://docs.example.com/launch'],
+  ]);
+  assert.equal(result.diagnostics.rejectedCount, 0);
+  assert.deepEqual(result.diagnostics.urlCorrections, [
+    {
+      id: 'tw-wrapper',
+      fromUrl: 'https://x.com/alice/status/1',
+      toUrl: 'https://docs.example.com/launch',
+      reason: 'origin_url',
+    },
+  ]);
+});
+
+test('enrichCuratedItemsWithDiagnostics accepts primary urls that only differ by tracking params', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: 'tracked',
+        title: 'Tracked item',
+        summary: 'Tracked summary',
+        url: 'https://example.com/report',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'tracked',
+        source: 'twitter',
+        text: 'Report',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/report?utm_source=x&ref_code=os_tw_spring',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string; url: string }) => [item.id, item.url]), [
+    ['tracked', 'https://example.com/report?utm_source=x&ref_code=os_tw_spring'],
+  ]);
+  assert.equal(result.diagnostics.rejectedCount, 0);
+  assert.deepEqual(result.diagnostics.urlCorrections, [
+    {
+      id: 'tracked',
+      fromUrl: 'https://example.com/report',
+      toUrl: 'https://example.com/report?utm_source=x&ref_code=os_tw_spring',
+      reason: 'tracking_params',
+    },
+  ]);
+});
+
+test('enrichCuratedItemsWithDiagnostics rejects unrelated urls and records url_mismatch samples', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: 'known',
+        title: 'Wrong URL',
+        summary: 'Wrong URL summary',
+        url: 'https://example.com/other-story',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'known',
+        source: 'twitter',
+        text: 'Known source text',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/known',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items, []);
+  assert.equal(result.diagnostics.rejectedCount, 1);
+  assert.equal(result.diagnostics.rejectionCounts.url_mismatch, 1);
+  assert.deepEqual(result.diagnostics.rejectionSamples, [
+    {
+      reason: 'url_mismatch',
+      id: 'known',
+      title: 'Wrong URL',
+      modelUrl: 'https://example.com/other-story',
+      sourceUrl: 'https://example.com/known',
+    },
+  ]);
+});
+
+test('enrichCuratedItemsWithDiagnostics records duplicate id and duplicate url rejections', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: 'same-id',
+        title: 'Same id',
+        summary: 'Same id summary',
+        url: 'https://example.com/same-id',
+        author: 'ignored',
+        category: 'Product',
+      },
+      {
+        id: 'same-id',
+        title: 'Same id duplicate',
+        summary: 'Same id duplicate summary',
+        url: 'https://example.com/same-id',
+        author: 'ignored',
+        category: 'Product',
+      },
+      {
+        id: 'same-url-lower',
+        title: 'Same URL lower',
+        summary: 'Same URL lower summary',
+        url: 'https://example.com/shared',
+        author: 'ignored',
+        category: 'Product',
+      },
+      {
+        id: 'same-url-higher',
+        title: 'Same URL higher',
+        summary: 'Same URL higher summary',
+        url: 'https://example.com/shared',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'same-id',
+        source: 'twitter',
+        text: 'Same id',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/same-id',
+        media: [],
+        priorityScore: 80,
+        editorialScore: 80,
+        engagementScore: 0,
+        decisionReasons: [],
+        scoreBreakdown: {
+          substance: 25,
+          evidence: 15,
+          sourceSignal: 8,
+          xArticleBonus: 0,
+          freshness: 8,
+          novelty: 15,
+          actionability: 9,
+          penalties: 0,
+        },
+      },
+      {
+        id: 'same-url-lower',
+        source: 'twitter',
+        text: 'Same URL lower',
+        author: { name: 'Bob', username: 'bob' },
+        publishedAt: '2026-05-19T00:01:00Z',
+        url: 'https://example.com/shared',
+        media: [],
+        priorityScore: 30,
+        editorialScore: 30,
+        engagementScore: 0,
+        decisionReasons: [],
+        scoreBreakdown: {
+          substance: 10,
+          evidence: 10,
+          sourceSignal: 5,
+          xArticleBonus: 0,
+          freshness: 8,
+          novelty: 10,
+          actionability: 0,
+          penalties: 0,
+        },
+      },
+      {
+        id: 'same-url-higher',
+        source: 'twitter',
+        text: 'Same URL higher',
+        author: { name: 'Carol', username: 'carol' },
+        publishedAt: '2026-05-19T00:02:00Z',
+        url: 'https://example.com/shared',
+        media: [],
+        priorityScore: 70,
+        editorialScore: 70,
+        engagementScore: 0,
+        decisionReasons: [],
+        scoreBreakdown: {
+          substance: 24,
+          evidence: 15,
+          sourceSignal: 7,
+          xArticleBonus: 0,
+          freshness: 8,
+          novelty: 15,
+          actionability: 1,
+          penalties: 0,
+        },
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['same-id', 'same-url-higher']);
+  assert.equal(result.diagnostics.rejectedCount, 2);
+  assert.equal(result.diagnostics.rejectionCounts.duplicate_id, 1);
+  assert.equal(result.diagnostics.rejectionCounts.duplicate_url, 1);
+  assert.deepEqual(
+    result.diagnostics.rejectionSamples.map((sample: { reason: string; id: string }) => [sample.reason, sample.id]),
+    [
+      ['duplicate_id', 'same-id'],
+      ['duplicate_url', 'same-url-lower'],
+    ],
+  );
+});
+
 test('enrichForcedRoundupItems returns one curated row for every forced roundup entry', async () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).enrichForcedRoundupItems, 'function');
 

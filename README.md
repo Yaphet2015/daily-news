@@ -203,14 +203,14 @@ output/YYYY-MM-DD-substack.html
 - **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，不再因为单篇文章缺少 caveat/signals 而整次中断
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
-- **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断。主整理模型返回后还会再次校验：只保留 ID 与 source URL 都匹配输入的条目，并按 ID / canonical URL 去掉重复输出，避免模型把同一段 JSON 数组重复返回到人工复选
+- **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断。主整理模型返回后还会再次校验：只保留 ID 与 source URL 都可信匹配的条目；若模型返回的是已知原帖 URL 或只差 `utm_*` / `ref` 等追踪参数，会纠正回采集到的 canonical URL，否则按原因丢弃。selection report 会记录丢弃计数、样例和 URL 纠正记录，方便回看低产出是否来自内容不足还是校验丢弃
 - **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认；每个候选项会显示来源、评分提示和最多 3 行摘要预览，便于人工决策
 - **审阅包**：自动化模式会额外写出 `output/<date>-review.json` 和 `output/<date>-review.md`，供定时任务汇报和人工预读；如果跳过一天，下一次 09:00 review 会先追加新内容到同一份 pending draft。v1 不做隐藏自动精选，最终 6-10 条仍由人工复选决定
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
 - **固定分组**：发布输出按 `Product`、`Tutorial`、`Opinions/Thoughts` 三组组织，不再展示条目标签
-- **决策可追踪**：每次运行会额外写出 `output/<date>-selection-report.json`，记录分数、候选池、AI 入选和人工入选状态
+- **决策可追踪**：每次运行会额外写出 `output/<date>-selection-report.json`，记录分数、候选池、AI 入选、人工入选状态和 curation 诊断信息
 
 ---
 

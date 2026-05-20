@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CuratedItem, NewsCategory, ReviewPacket, ReviewPacketPaths } from './types.js';
+import type { CuratedItem, CurationDiagnostics, NewsCategory, ReviewPacket, ReviewPacketPaths } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, '..', 'output');
@@ -20,6 +20,20 @@ function formatOptionalLine(label: string, value: string | number | undefined): 
   return value == null || value === '' ? null : `- ${label}: ${value}`;
 }
 
+function formatCurationDiagnostics(diagnostics: CurationDiagnostics | undefined): string | null {
+  if (!diagnostics) return null;
+
+  const rejectionSummary = Object.entries(diagnostics.rejectionCounts)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(', ');
+  const rejected = rejectionSummary
+    ? `rejected=${diagnostics.rejectedCount} (${rejectionSummary})`
+    : `rejected=${diagnostics.rejectedCount}`;
+
+  return `Curation diagnostics: ${rejected}, corrected_urls=${diagnostics.urlCorrections.length}`;
+}
+
 function formatReviewMarkdown(packet: ReviewPacket): string {
   const header = [
     `# daily-news Review · ${packet.date}`,
@@ -29,7 +43,10 @@ function formatReviewMarkdown(packet: ReviewPacket): string {
     `Collected at: ${new Date(packet.collectedAt * 1000).toISOString()}`,
     `Sources: ${packet.enabledSources.join(', ')}`,
     `Curated items: ${packet.curatedItems.length}`,
-  ].join('\n');
+    formatCurationDiagnostics(packet.curationDiagnostics),
+  ]
+    .filter((line): line is string => line != null)
+    .join('\n');
 
   const body = groupItems(packet.curatedItems)
     .map(({ category, items }) => {

@@ -144,6 +144,39 @@ export interface CuratedItem {
   sourceResolution?: SourceResolution;
 }
 
+export type CurationRejectionReason = 'unknown_id' | 'url_mismatch' | 'duplicate_id' | 'duplicate_url';
+export type CurationUrlCorrectionReason = 'origin_url' | 'tracking_params';
+
+export interface CurationRejectionSample {
+  reason: CurationRejectionReason;
+  id: string;
+  title?: string;
+  modelUrl?: string;
+  sourceUrl?: string;
+  originUrl?: string;
+}
+
+export interface CurationUrlCorrection {
+  id: string;
+  fromUrl: string;
+  toUrl: string;
+  reason: CurationUrlCorrectionReason;
+}
+
+export interface CurationDiagnostics {
+  inputCount: number;
+  outputCount: number;
+  rejectedCount: number;
+  rejectionCounts: Record<CurationRejectionReason, number>;
+  rejectionSamples: CurationRejectionSample[];
+  urlCorrections: CurationUrlCorrection[];
+}
+
+export interface CurateResult {
+  items: CuratedItem[];
+  diagnostics: CurationDiagnostics;
+}
+
 export interface FormatResult {
   obsidian: string;
   substack: string;
@@ -152,6 +185,7 @@ export interface FormatResult {
 
 export interface SelectionReport {
   date: string;
+  curationDiagnostics?: CurationDiagnostics;
   rankedItems: RankedItem[];
   curatedItems: CuratedItem[];
   selectedItems: CuratedItem[];
@@ -163,6 +197,7 @@ export interface ReviewPacket {
   enabledSources: SourceName[];
   rankedItems: RankedItem[];
   curatedItems: CuratedItem[];
+  curationDiagnostics?: CurationDiagnostics;
   nextAction: string;
 }
 

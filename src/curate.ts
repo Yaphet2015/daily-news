@@ -4,12 +4,25 @@ import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
-import type { CollectedItem, CuratedItem, MediaAsset, NewsCategory, RankedItem, ReaderBrief } from './types.js';
+import type {
+  CollectedItem,
+  CuratedItem,
+  CurateResult,
+  CurationDiagnostics,
+  CurationRejectionReason,
+  CurationUrlCorrectionReason,
+  MediaAsset,
+  NewsCategory,
+  RankedItem,
+  ReaderBrief,
+} from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT_PATH = join(__dirname, '..', 'prompts', 'curator.md');
 const DEFAULT_READER_MODEL = 'gpt-4o-mini';
 const FORCED_ROUNDUP_MODEL = 'gpt-4o-mini';
+const REJECTION_SAMPLE_LIMIT = 10;
+const TRACKING_QUERY_PARAMS = new Set(['ref', 'ref_code', 'gclid', 'fbclid', 'mc_cid', 'mc_eid']);
 
 interface LlmCuratedItem {
   id: string;
@@ -176,6 +189,95 @@ function normalizeUrl(value: string): string {
   } catch {
     return trimmed;
   }
+}
+
+function normalizeUrlWithoutTracking(value: string): string {
+  const normalized = normalizeUrl(value);
+  try {
+    const url = new URL(normalized);
+    for (const key of Array.from(url.searchParams.keys())) {
+      const normalizedKey = key.toLowerCase();
+      if (normalizedKey.startsWith('utm_') || TRACKING_QUERY_PARAMS.has(normalizedKey)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.searchParams.sort();
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return normalized;
+  }
+}
+
+function createEmptyCurationDiagnostics(inputCount: number): CurationDiagnostics {
+  return {
+    inputCount,
+    outputCount: 0,
+    rejectedCount: 0,
+    rejectionCounts: {
+      unknown_id: 0,
+      url_mismatch: 0,
+      duplicate_id: 0,
+      duplicate_url: 0,
+    },
+    rejectionSamples: [],
+    urlCorrections: [],
+  };
+}
+
+function recordCurationRejection(
+  diagnostics: CurationDiagnostics,
+  reason: CurationRejectionReason,
+  item: Pick<LlmCuratedItem, 'id' | 'title' | 'url'>,
+  sourceItem?: CollectedItem,
+): void {
+  diagnostics.rejectedCount += 1;
+  diagnostics.rejectionCounts[reason] += 1;
+
+  if (diagnostics.rejectionSamples.length >= REJECTION_SAMPLE_LIMIT) return;
+  const sample = {
+    reason,
+    id: item.id,
+    title: item.title,
+    modelUrl: item.url,
+  };
+  diagnostics.rejectionSamples.push({
+    ...sample,
+    ...(sourceItem?.url ? { sourceUrl: sourceItem.url } : {}),
+    ...(sourceItem?.originUrl ? { originUrl: sourceItem.originUrl } : {}),
+  });
+}
+
+function recordUrlCorrection(
+  diagnostics: CurationDiagnostics,
+  item: LlmCuratedItem,
+  sourceItem: CollectedItem,
+  reason: CurationUrlCorrectionReason,
+): void {
+  diagnostics.urlCorrections.push({
+    id: item.id,
+    fromUrl: item.url,
+    toUrl: sourceItem.url,
+    reason,
+  });
+}
+
+function getSafeUrlCorrectionReason(
+  modelUrl: string,
+  sourceItem: CollectedItem,
+): CurationUrlCorrectionReason | null {
+  const normalizedModelUrl = normalizeUrl(modelUrl);
+  const normalizedSourceUrl = normalizeUrl(sourceItem.url);
+  if (normalizedModelUrl === normalizedSourceUrl) return null;
+
+  if (sourceItem.originUrl && normalizedModelUrl === normalizeUrl(sourceItem.originUrl)) {
+    return 'origin_url';
+  }
+
+  if (normalizeUrlWithoutTracking(modelUrl) === normalizeUrlWithoutTracking(sourceItem.url)) {
+    return 'tracking_params';
+  }
+
+  return null;
 }
 
 function hasHigherPriority(candidate: CuratedItem, current: CuratedItem): boolean {
@@ -441,6 +543,28 @@ export function warnOnUnderfilledCuratedItems(
   );
 }
 
+function formatNonZeroRejectionCounts(diagnostics: CurationDiagnostics): string {
+  return Object.entries(diagnostics.rejectionCounts)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(', ');
+}
+
+function warnOnCurationDiagnostics(
+  diagnostics: CurationDiagnostics,
+  warn: (message: string) => void = console.warn,
+): void {
+  const correctedCount = diagnostics.urlCorrections.length;
+  if (diagnostics.rejectedCount === 0 && correctedCount === 0) return;
+
+  const rejectedSummary =
+    diagnostics.rejectedCount > 0
+      ? `已丢弃 ${diagnostics.rejectedCount} 条 AI 输出：${formatNonZeroRejectionCounts(diagnostics)}`
+      : '未丢弃 AI 输出';
+  const correctionSummary = correctedCount > 0 ? `；已纠正 ${correctedCount} 条 URL` : '';
+  warn(`[curate] ${rejectedSummary}${correctionSummary}`);
+}
+
 export async function attachReaderBriefs(
   items: CollectedItem[],
   reader: ReaderFn = readSubstackArticle,
@@ -539,12 +663,27 @@ function buildForcedRoundupPayload(items: CollectedItem[]): string {
     .join('\n\n---\n\n');
 }
 
-export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: CollectedItem[]): CuratedItem[] {
+export function enrichCuratedItemsWithDiagnostics(
+  items: LlmCuratedItem[],
+  collectedItems: CollectedItem[],
+): CurateResult {
+  const diagnostics = createEmptyCurationDiagnostics(items.length);
   const itemById = new Map(collectedItems.map((item) => [item.id, item]));
 
   const enrichedItems = items.flatMap((item) => {
     const sourceItem = itemById.get(item.id);
-    if (!sourceItem || normalizeUrl(item.url) !== normalizeUrl(sourceItem.url)) return [];
+    if (!sourceItem) {
+      recordCurationRejection(diagnostics, 'unknown_id', item);
+      return [];
+    }
+
+    const correctionReason = getSafeUrlCorrectionReason(item.url, sourceItem);
+    if (correctionReason !== null) {
+      recordUrlCorrection(diagnostics, item, sourceItem, correctionReason);
+    } else if (normalizeUrl(item.url) !== normalizeUrl(sourceItem.url)) {
+      recordCurationRejection(diagnostics, 'url_mismatch', item, sourceItem);
+      return [];
+    }
 
     const author =
       sourceItem.author.username ??
@@ -592,7 +731,12 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
   for (const item of enrichedItems) {
     const current = byId.get(item.id);
     if (!current || hasHigherPriority(item, current)) {
+      if (current) {
+        recordCurationRejection(diagnostics, 'duplicate_id', current, itemById.get(current.id));
+      }
       byId.set(item.id, item);
+    } else {
+      recordCurationRejection(diagnostics, 'duplicate_id', item, itemById.get(item.id));
     }
   }
 
@@ -601,11 +745,26 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
     const key = normalizeUrl(item.url);
     const current = byUrl.get(key);
     if (!current || hasHigherPriority(item, current)) {
+      if (current) {
+        recordCurationRejection(diagnostics, 'duplicate_url', current, itemById.get(current.id));
+      }
       byUrl.set(key, item);
+    } else {
+      recordCurationRejection(diagnostics, 'duplicate_url', item, itemById.get(item.id));
     }
   }
 
-  return Array.from(byUrl.values());
+  const resultItems = Array.from(byUrl.values());
+  diagnostics.outputCount = resultItems.length;
+
+  return {
+    items: resultItems,
+    diagnostics,
+  };
+}
+
+export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: CollectedItem[]): CuratedItem[] {
+  return enrichCuratedItemsWithDiagnostics(items, collectedItems).items;
 }
 
 async function parseCurateItemsWithRetry(
@@ -717,16 +876,20 @@ export async function curateWithModel(
   );
 }
 
-export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
+export async function curateWithDiagnostics(items: CollectedItem[]): Promise<CurateResult> {
   if (items.length === 0) {
     console.log('[curate] 没有内容需要整理');
-    return [];
+    return {
+      items: [],
+      diagnostics: createEmptyCurationDiagnostics(0),
+    };
   }
 
   const normalItems = items.filter((item) => !isSubstackRoundupEntry(item) || !item.forceSelect);
   const forcedRoundupItems = items.filter((item) => isSubstackRoundupEntry(item) && item.forceSelect);
 
   let curatedItems: CuratedItem[] = [];
+  let diagnostics = createEmptyCurationDiagnostics(0);
   if (normalItems.length > 0) {
     const systemPrompt = await readFile(PROMPT_PATH, 'utf-8');
     const userContent =
@@ -736,10 +899,10 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
     console.log('[curate] main_curate: 预处理 Substack 文章并调用主整理模型...');
     try {
       const llmItems = await curateWithModel(systemPrompt, userContent);
-      curatedItems = enrichCuratedItems(llmItems, normalItems);
-      if (curatedItems.length < llmItems.length) {
-        console.warn(`[curate] 已丢弃 ${llmItems.length - curatedItems.length} 条重复或无效的 AI 输出条目`);
-      }
+      const enriched = enrichCuratedItemsWithDiagnostics(llmItems, normalItems);
+      curatedItems = enriched.items;
+      diagnostics = enriched.diagnostics;
+      warnOnCurationDiagnostics(diagnostics);
     } catch (error) {
       console.error(`[curate] main_curate failed: ${summarizeError(error)}`);
       throw error;
@@ -761,5 +924,12 @@ export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
   warnOnUnderfilledCuratedItems(merged.length);
 
   console.log(`[curate] AI 整理完成，共 ${merged.length} 条资讯`);
-  return merged;
+  return {
+    items: merged,
+    diagnostics,
+  };
+}
+
+export async function curate(items: CollectedItem[]): Promise<CuratedItem[]> {
+  return (await curateWithDiagnostics(items)).items;
 }

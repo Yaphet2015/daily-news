@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseGenerateOptions, runGenerate } from '../src/generate.js';
-import type { CollectionSnapshot, CuratedItem, PendingDraft, ReviewPacket } from '../src/types.js';
+import type { CollectionSnapshot, CuratedItem, CurationDiagnostics, PendingDraft, ReviewPacket } from '../src/types.js';
 
 function createSnapshot(overrides: Partial<CollectionSnapshot> = {}): CollectionSnapshot {
   return {
@@ -55,6 +55,38 @@ function createCuratedItem(overrides: Partial<CuratedItem> = {}): CuratedItem {
     source: 'twitter',
     category: 'Product',
     media: [],
+    ...overrides,
+  };
+}
+
+function createCurationDiagnostics(overrides: Partial<CurationDiagnostics> = {}): CurationDiagnostics {
+  return {
+    inputCount: 2,
+    outputCount: 1,
+    rejectedCount: 1,
+    rejectionCounts: {
+      unknown_id: 0,
+      url_mismatch: 1,
+      duplicate_id: 0,
+      duplicate_url: 0,
+    },
+    rejectionSamples: [
+      {
+        reason: 'url_mismatch',
+        id: 'tw-2',
+        title: 'Wrong URL',
+        modelUrl: 'https://example.com/wrong',
+        sourceUrl: 'https://example.com/right',
+      },
+    ],
+    urlCorrections: [
+      {
+        id: 'tw-1',
+        fromUrl: 'https://x.com/alice/status/1',
+        toUrl: 'https://example.com/right',
+        reason: 'origin_url',
+      },
+    ],
     ...overrides,
   };
 }
@@ -130,6 +162,82 @@ test('runGenerate resumes an existing pending draft without recollecting and cle
     'writeState:1710000000',
     'clearDraft',
   ]);
+});
+
+test('runGenerate writes curation diagnostics into the selection report when curate returns diagnostics', async () => {
+  let publishedReport: unknown;
+  const diagnostics = createCurationDiagnostics();
+
+  await runGenerate({
+    readDraft: async () => null,
+    collect: async () => createSnapshot(),
+    writeDraft: async () => {},
+    clearDraft: async () => {},
+    readState: async () => ({
+      sources: {
+        twitter: { lastPublishedTime: 100 },
+        substack: { lastPublishedTime: 0 },
+      },
+    }),
+    writeState: async () => {},
+    attachReaderBriefs: async (items) => items,
+    rankItems: (items) => items as never,
+    selectCandidatePool: (items) => items as never,
+    curate: async () => ({
+      items: [createCuratedItem()],
+      diagnostics,
+    }),
+    select: async (items) => items,
+    format: (items, date) => ({ date, obsidian: `obsidian:${items.length}`, substack: 'substack' }),
+    publish: async (_formatted, report) => {
+      publishedReport = report;
+    },
+    log: () => {},
+  });
+
+  assert.deepEqual((publishedReport as { curationDiagnostics?: CurationDiagnostics }).curationDiagnostics, diagnostics);
+});
+
+test('runGenerate writes curation diagnostics into review packets when curate returns diagnostics', async () => {
+  let reviewPacket: ReviewPacket | undefined;
+  const diagnostics = createCurationDiagnostics();
+
+  await runGenerate(
+    {
+      readDraft: async () => createDraft(),
+      collect: async () => createSnapshot({ items: [] }),
+      writeDraft: async () => {},
+      clearDraft: async () => {},
+      readState: async () => ({
+        sources: {
+          twitter: { lastPublishedTime: 100 },
+          substack: { lastPublishedTime: 0 },
+        },
+      }),
+      writeState: async () => {},
+      attachReaderBriefs: async (items) => items,
+      rankItems: (items) => items as never,
+      selectCandidatePool: (items) => items as never,
+      curate: async () => ({
+        items: [createCuratedItem()],
+        diagnostics,
+      }),
+      select: async (items) => items,
+      format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+      publish: async () => {},
+      writeReviewPacket: async (packet) => {
+        reviewPacket = packet;
+        return {
+          jsonPath: '/tmp/2024-03-09-review.json',
+          markdownPath: '/tmp/2024-03-09-review.md',
+        };
+      },
+      log: () => {},
+    },
+    { mode: 'review' },
+  );
+
+  assert.deepEqual(reviewPacket?.curationDiagnostics, diagnostics);
 });
 
 test('parseGenerateOptions detects review diagnose mode without changing review mode parsing', () => {
