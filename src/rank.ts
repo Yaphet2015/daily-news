@@ -128,6 +128,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
   const hasLinkedSource = Boolean(item.linkedSource);
   const { penalty: authorPenalty, bonus: authorBonus } = getAuthorAdjustment(item);
   const xArticleBonus = isXArticleSource(item) ? 10 : 0;
+  const substackSourceBonus = item.source === 'substack' ? 10 : 0;
 
   const substance = clamp(
     (text.length >= 80 ? 10 : 4) +
@@ -163,6 +164,7 @@ function computeEditorialBreakdown(item: CollectedItem, newestTimestamp: number)
     evidence,
     sourceSignal,
     xArticleBonus,
+    substackSourceBonus,
     freshness,
     novelty,
     actionability,
@@ -176,6 +178,7 @@ function toEditorialScore(breakdown: ScoreBreakdown): number {
     breakdown.evidence +
     breakdown.sourceSignal +
     breakdown.xArticleBonus +
+    breakdown.substackSourceBonus +
     breakdown.freshness +
     breakdown.novelty +
     breakdown.actionability +

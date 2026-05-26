@@ -79,6 +79,7 @@ test('writeSelectionReport persists ranking, curation, and human selection metad
           evidence: 14,
           sourceSignal: 6,
           xArticleBonus: 0,
+          substackSourceBonus: 0,
           freshness: 9,
           novelty: 15,
           actionability: 0,

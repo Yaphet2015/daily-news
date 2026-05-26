@@ -295,6 +295,36 @@ test('rankItems adds X article bonus for articleTitle/articleText fallback tweet
   assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /X article/);
 });
 
+test('rankItems adds exactly 10 extra editorial points for Substack posts', () => {
+  const baseText =
+    'This article gives a detailed technical analysis of practical lessons from deploying systems at scale https://example.com/story';
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'twitter',
+      source: 'twitter',
+      url: 'https://x.com/author/status/1',
+      author: { name: 'Author', username: 'author' },
+      text: `${baseText} alpha`,
+    }),
+    makeTwitterItem({
+      id: 'substack',
+      source: 'substack',
+      url: 'https://author.substack.com/p/story',
+      author: { name: 'Author', username: 'author' },
+      text: `${baseText} bravo`,
+    }),
+  ]);
+
+  const twitter = ranked.find((item) => item.id === 'twitter');
+  const substack = ranked.find((item) => item.id === 'substack');
+
+  assert.ok(twitter);
+  assert.ok(substack);
+  assert.equal(twitter?.scoreBreakdown.substackSourceBonus, 0);
+  assert.equal(substack?.scoreBreakdown.substackSourceBonus, 10);
+  assert.equal(substack?.editorialScore, (twitter?.editorialScore ?? 0) + 14);
+});
+
 test('rankItems stops marking long-form Substack posts as low quality when a reader brief is present', () => {
   const withoutBrief = makeTwitterItem({
     id: 'llm-bench-without-brief',

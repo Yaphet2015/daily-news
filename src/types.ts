@@ -107,6 +107,7 @@ export interface ScoreBreakdown {
   evidence: number;
   sourceSignal: number;
   xArticleBonus: number;
+  substackSourceBonus: number;
   freshness: number;
   novelty: number;
   actionability: number;

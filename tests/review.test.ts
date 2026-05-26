@@ -60,6 +60,7 @@ test('writeReviewPacket persists JSON and human-readable Markdown review artifac
           evidence: 14,
           sourceSignal: 6,
           xArticleBonus: 0,
+          substackSourceBonus: 0,
           freshness: 9,
           novelty: 15,
           actionability: 0,
