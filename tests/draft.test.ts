@@ -21,6 +21,7 @@ test('writePendingDraft persists and readPendingDraft restores the pending draft
   const draft: PendingDraft = {
     collectedAt: 1710000000,
     enabledSources: ['twitter', 'substack'],
+    collectionWarnings: ['recommendation feed skipped'],
     items: [
       {
         id: 'tw-1',

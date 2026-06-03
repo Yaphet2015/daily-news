@@ -34,6 +34,11 @@ function formatCurationDiagnostics(diagnostics: CurationDiagnostics | undefined)
   return `Curation diagnostics: ${rejected}, corrected_urls=${diagnostics.urlCorrections.length}`;
 }
 
+function formatCollectionWarnings(warnings: string[] | undefined): string | null {
+  if (!warnings || warnings.length === 0) return null;
+  return ['Collection warnings:', ...warnings.map((warning) => `- ${warning}`)].join('\n');
+}
+
 function formatReviewMarkdown(packet: ReviewPacket): string {
   const header = [
     `# daily-news Review · ${packet.date}`,
@@ -42,6 +47,7 @@ function formatReviewMarkdown(packet: ReviewPacket): string {
     '',
     `Collected at: ${new Date(packet.collectedAt * 1000).toISOString()}`,
     `Sources: ${packet.enabledSources.join(', ')}`,
+    formatCollectionWarnings(packet.collectionWarnings),
     `Curated items: ${packet.curatedItems.length}`,
     formatCurationDiagnostics(packet.curationDiagnostics),
   ]

@@ -473,6 +473,195 @@ test('buildTwitterCliCommand exports TWITTER_PROXY and HTTP(S)_PROXY for twitter
   );
 });
 
+test('buildTwitterFeedCommand injects recommendation account cookies only for the feed command', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).buildTwitterFeedCommand, 'function');
+
+  const buildTwitterFeedCommand = (collectModule as Record<string, Function>).buildTwitterFeedCommand;
+
+  assert.equal(
+    buildTwitterFeedCommand('for-you', 500, 'http://127.0.0.1:6152', {
+      authToken: 'recommend-auth',
+      ct0: 'recommend-ct0',
+    }),
+    'TWITTER_PROXY=http://127.0.0.1:6152 HTTP_PROXY=http://127.0.0.1:6152 HTTPS_PROXY=http://127.0.0.1:6152 TWITTER_AUTH_TOKEN=recommend-auth TWITTER_CT0=recommend-ct0 twitter feed --type for-you --max 500 --json',
+  );
+});
+
+test('fetchTwitterRecommendationAuthFromCdp extracts auth_token and ct0 from CDP cookies', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).fetchTwitterRecommendationAuthFromCdp, 'function');
+
+  const fetchTwitterRecommendationAuthFromCdp = (collectModule as Record<string, Function>)
+    .fetchTwitterRecommendationAuthFromCdp;
+
+  const auth = await fetchTwitterRecommendationAuthFromCdp({
+    fetchJson: async (url: string) => {
+      assert.equal(url, 'http://127.0.0.1:9222/json/version');
+      return { webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/1' };
+    },
+    sendCdpCommand: async (webSocketUrl: string, method: string) => {
+      assert.equal(webSocketUrl, 'ws://127.0.0.1:9222/devtools/browser/1');
+      assert.equal(method, 'Network.getAllCookies');
+      return {
+        cookies: [
+          { name: 'auth_token', value: 'recommend-auth', domain: '.x.com' },
+          { name: 'ct0', value: 'recommend-ct0', domain: '.x.com' },
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(auth, {
+    authToken: 'recommend-auth',
+    ct0: 'recommend-ct0',
+  });
+});
+
+test('fetchTwitterRecommendationAuthFromCdp falls back to an open X page target', async () => {
+  const fetchTwitterRecommendationAuthFromCdp = (collectModule as Record<string, Function>)
+    .fetchTwitterRecommendationAuthFromCdp;
+  const commandCalls: string[] = [];
+
+  const auth = await fetchTwitterRecommendationAuthFromCdp({
+    fetchJson: async (url: string) => {
+      if (url.endsWith('/json/version')) {
+        return { webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/1' };
+      }
+      if (url.endsWith('/json/list')) {
+        return [
+          {
+            type: 'page',
+            url: 'https://x.com/home',
+            webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/x-home',
+          },
+        ];
+      }
+      throw new Error(`unexpected url: ${url}`);
+    },
+    sendCdpCommand: async (webSocketUrl: string, method: string) => {
+      commandCalls.push(`${webSocketUrl} ${method}`);
+      if (webSocketUrl.includes('/browser/')) throw new Error('browser target does not expose cookies');
+      return {
+        cookies: [
+          { name: 'auth_token', value: 'page-auth', domain: '.x.com' },
+          { name: 'ct0', value: 'page-ct0', domain: '.x.com' },
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(auth, {
+    authToken: 'page-auth',
+    ct0: 'page-ct0',
+  });
+  assert.deepEqual(commandCalls, [
+    'ws://127.0.0.1:9222/devtools/browser/1 Network.getAllCookies',
+    'ws://127.0.0.1:9222/devtools/page/x-home Network.getAllCookies',
+  ]);
+});
+
+test('collectTwitterRecommendationItems skips recommendation feed when CDP has no logged-in X cookies', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collectTwitterRecommendationItems, 'function');
+
+  const collectTwitterRecommendationItems = (collectModule as Record<string, Function>)
+    .collectTwitterRecommendationItems;
+  const warnings: string[] = [];
+  let retried = false;
+
+  const result = await collectTwitterRecommendationItems(100, {
+    fetchRecommendationAuth: async () => null,
+    chooseRecommendationLoginRetry: async () => {
+      retried = true;
+      return false;
+    },
+    warn: (message: string) => warnings.push(message),
+  });
+
+  assert.equal(retried, true);
+  assert.deepEqual(result.items, []);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /未检测到 CDP 浏览器中的 X 登录/);
+  assert.match(warnings[0], /跳过推荐流/);
+});
+
+test('filterAiRelatedRecommendationItems sends only 500-character previews and keeps AI-related recommendations', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).filterAiRelatedRecommendationItems, 'function');
+
+  const filterAiRelatedRecommendationItems = (collectModule as Record<string, Function>)
+    .filterAiRelatedRecommendationItems;
+  const longText = `OpenAI released a new agent workflow. ${'x'.repeat(700)}`;
+  const seen: Array<{ id: string; textPreview: string }> = [];
+
+  const result = await filterAiRelatedRecommendationItems(
+    [
+      {
+        id: 'ai-1',
+        source: 'twitter',
+        twitterFeed: 'for-you',
+        text: longText,
+        publishedAt: '2026-03-15T09:00:00Z',
+        url: 'https://x.com/alice/status/1',
+        author: { name: 'Alice', username: 'alice' },
+        media: [],
+      },
+      {
+        id: 'non-ai-1',
+        source: 'twitter',
+        twitterFeed: 'for-you',
+        text: 'A general note about mobile app design.',
+        publishedAt: '2026-03-15T09:01:00Z',
+        url: 'https://x.com/bob/status/2',
+        author: { name: 'Bob', username: 'bob' },
+        media: [],
+      },
+    ],
+    async (items: Array<{ id: string; textPreview: string }>) => {
+      seen.push(...items);
+      return new Set(['ai-1']);
+    },
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['ai-1']);
+  assert.equal(seen[0]?.id, 'ai-1');
+  assert.equal(seen[0]?.textPreview.length, 500);
+  assert.deepEqual(seen.map((item) => item.id), ['ai-1', 'non-ai-1']);
+});
+
+test('collectSources preserves source collection warnings alongside successful items', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collectSources, 'function');
+
+  const collectSources = (collectModule as Record<string, Function>).collectSources;
+  const result = await collectSources({
+    enabledSources: ['twitter'],
+    nowSeconds: 1710000000,
+    state: {
+      sources: {
+        twitter: { lastPublishedTime: 100 },
+        substack: { lastPublishedTime: 200 },
+      },
+    },
+    collectors: {
+      twitter: async () => ({
+        items: [
+          {
+            id: 'tw-1',
+            source: 'twitter',
+            text: 'tweet',
+            publishedAt: '2026-03-15T09:00:00Z',
+            url: 'https://x.com/alice/status/1',
+            author: { name: 'Alice', username: 'alice' },
+            media: [],
+          },
+        ],
+        warnings: ['recommendation feed skipped'],
+      }),
+      substack: async () => [],
+    },
+  });
+
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['tw-1']);
+  assert.deepEqual(result.collectionWarnings, ['recommendation feed skipped']);
+});
+
 test('summarizeTwitterCliError prefers structured stdout payloads over stderr warnings', () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).summarizeTwitterCliError, 'function');
 

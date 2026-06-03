@@ -40,6 +40,7 @@ test('writeReviewPacket persists JSON and human-readable Markdown review artifac
     date: '2026-05-06',
     collectedAt: 1778000400,
     enabledSources: ['twitter', 'substack'],
+    collectionWarnings: ['recommendation feed skipped'],
     nextAction: 'Run `npm run generate`, choose `resume`, then select the final items.',
     curationDiagnostics,
     rankedItems: [
@@ -97,11 +98,13 @@ test('writeReviewPacket persists JSON and human-readable Markdown review artifac
   assert.equal(paths.jsonPath, join(outputDir, '2026-05-06-review.json'));
   assert.equal(paths.markdownPath, join(outputDir, '2026-05-06-review.md'));
   assert.equal(json.collectedAt, 1778000400);
+  assert.deepEqual(json.collectionWarnings, ['recommendation feed skipped']);
   assert.deepEqual(json.curationDiagnostics, curationDiagnostics);
   assert.equal(json.rankedItems[0]?.enteredCandidatePool, true);
   assert.equal(json.rankedItems[0]?.selectedByLlm, true);
   assert.match(markdown, /# daily-news Review · 2026-05-06/);
   assert.match(markdown, /Next action: Run `npm run generate`, choose `resume`, then select the final items\./);
+  assert.match(markdown, /Collection warnings:\n- recommendation feed skipped/);
   assert.match(markdown, /Curation diagnostics: rejected=1 \(url_mismatch=1\), corrected_urls=1/);
   assert.match(markdown, /## Product/);
   assert.match(markdown, /### 1\. OpenAI 发布新文档/);

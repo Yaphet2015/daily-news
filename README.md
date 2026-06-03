@@ -7,11 +7,11 @@ AI 驱动的每日资讯日刊系统。一条命令完成：Twitter / Substack �
 ```
 npm run generate
     │
-    ├─ 1. 采集  → 拉取 Twitter 列表 + 已订阅 Substack publication 新文章
+    ├─ 1. 采集  → 拉取 Twitter 列表 + X For You 推荐流 + 已订阅 Substack publication 新文章
     ├─    暂存  → 采集成功后立即写入 pending draft，后续失败可恢复
     ├─ 2. 归一化 → 对 Twitter 条目抽取正文 / replies 外链；若 tweet 只是宣发或摘要，则改用外链作为主 source
     ├─ 3. 预读  → 用额外的快模型读完 Substack 全文并压缩成 briefing，供后续排序和整理复用
-    ├─ 4. 排序  → 基于外链证据、briefing、新鲜度和重复关系做候选池裁剪
+    ├─ 4. 排序  → 推荐流先过 AI 相关性预筛，再基于外链证据、briefing、新鲜度和重复关系做候选池裁剪
     ├─ 5. 整理  → 主模型基于跨来源文本 + briefing + 媒体元数据筛选并归纳为 40-50 条结构化资讯，按 Product / Tutorial / Opinions/Thoughts 分组
     ├─ 6. 复选  → 终端交互，人工勾选 6-10 条
     ├─ 7. 格式化 → 生成 Obsidian Markdown + Substack HTML（附带图片会渲染照片）
@@ -82,8 +82,12 @@ npm run generate:review:diagnose
 | `HTTP_PROXY` | 否 | 项目级代理入口；采集时会同时转发给 Substack 抓取和 `twitter-cli`（内部会映射为 `TWITTER_PROXY` + `HTTP_PROXY` + `HTTPS_PROXY`），为空时使用系统代理 |
 | `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
+| `ENABLE_TWITTER_RECOMMENDATIONS` | 否 | 是否额外采集 X For You 推荐流，默认启用；设为 `false` / `0` / `no` 可关闭 |
+| `TWITTER_RECOMMENDATION_CDP_ENDPOINT` | 否 | 推荐流专用账号所在的 CDP Chrome 地址，默认 `http://127.0.0.1:9222` |
+| `TWITTER_RECOMMENDATION_MAX_TWEETS` | 否 | 每次最多拉取多少条推荐流，默认 `500` |
+| `TWITTER_RECOMMENDATION_FILTER_MODEL` | 否 | 推荐流 AI 相关性预筛模型，默认 `gpt-4o-mini` |
 
-说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。`twitter-cli` 在失败时可能把结构化错误写到 `stdout`、把诊断 warning 写到 `stderr`；项目会优先展示结构化错误消息，便于排查认证和代理问题。
+说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。X List 继续使用 `twitter-cli` 的默认认证路径；X For You 推荐流每次从 CDP Chrome 读取专用新账号的 `auth_token` / `ct0` 并临时注入子进程，不写入 `.env`。如果未检测到 CDP 浏览器登录，交互运行会询问是否现在登录后重试；选择不重试或非交互运行时，会跳过推荐流并在 review / selection report 中记录 warning。`twitter-cli` 在失败时可能把结构化错误写到 `stdout`、把诊断 warning 写到 `stderr`；项目会优先展示结构化错误消息，便于排查认证和代理问题。
 
 **获取 twitterapi.io API Key：**
 1. 前往 [https://twitterapi.io](https://twitterapi.io) 注册账号
@@ -196,13 +200,14 @@ output/YYYY-MM-DD-substack.html
 - **可恢复草稿**：只要采集成功，就会先把原始采集结果写入 `data/pending-draft.json`。如果后续 Substack 预读、AI 整理、人工复选或本地发布阶段失败，下次运行会先提示是继续发布这份历史草稿、丢弃后重新采集，还是直接取消
 - **发布游标 SSOT**：`data/state.json` 只在本地发布阶段成功结束后才推进，记录每个来源最近一次成功发布到本地产物的采集时间；单纯采集成功不会推进这个游标，避免分析失败后丢稿
 - **自动化审阅模式**：`npm run generate:review` 复用同一条采集、预读、排序和 AI 整理链路，但停止在人工复选前。已有 pending draft 时，它会先从草稿采集时间继续采集 fresh 内容，按条目 ID 和来源 URL 去重合并后再写回同一份草稿；发布游标仍不推进，方便后续交互发布从合并后的采集结果继续
-- **双数据源**：优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`
+- **双数据源**：X List 优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`；X For You 推荐流使用 CDP Chrome 中登录的新账号 Cookie，失败时只跳过推荐流
 - **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，并与仓库内 pinned publications 合并，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
 - **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，不再因为单篇文章缺少 caveat/signals 而整次中断
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
+- **推荐流预筛**：X For You scope 更宽，进入 source resolution 和 ranking 前会先用快模型读取每条前 500 字，只保留 AI 模型、AI 产品、agent/devtools、ML research、AI infra、benchmark、AI 行业结构等相关内容
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断。主整理模型返回后还会再次校验：只保留 ID 与 source URL 都可信匹配的条目；若模型返回的是已知原帖 URL 或只差 `utm_*` / `ref` 等追踪参数，会纠正回采集到的 canonical URL，否则按原因丢弃。selection report 会记录丢弃计数、样例和 URL 纠正记录，方便回看低产出是否来自内容不足还是校验丢弃
 - **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径

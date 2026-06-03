@@ -145,6 +145,9 @@ function mergePendingDraftWithFreshSnapshot(draft: PendingDraft, freshSnapshot: 
   return {
     collectedAt: freshSnapshot.collectedAt,
     enabledSources: Array.from(new Set([...draft.enabledSources, ...freshSnapshot.enabledSources])),
+    collectionWarnings: Array.from(
+      new Set([...(draft.collectionWarnings ?? []), ...(freshSnapshot.collectionWarnings ?? [])]),
+    ),
     items,
   };
 }
@@ -199,6 +202,7 @@ function normalizeCurateResult(result: CuratedItem[] | CurateResult): { items: C
 
 function buildSelectionReport(
   date: string,
+  collectionWarnings: string[] | undefined,
   rankedItems: RankedItem[],
   candidateItems: CollectedItem[],
   curatedItems: CuratedItem[],
@@ -207,6 +211,7 @@ function buildSelectionReport(
 ): SelectionReport {
   return {
     date,
+    ...(collectionWarnings && collectionWarnings.length > 0 ? { collectionWarnings } : {}),
     curationDiagnostics,
     rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems, selectedItems),
     curatedItems,
@@ -225,6 +230,9 @@ function buildReviewPacket(
     date: formatDateFromUnixSeconds(snapshot.collectedAt),
     collectedAt: snapshot.collectedAt,
     enabledSources: snapshot.enabledSources,
+    ...(snapshot.collectionWarnings && snapshot.collectionWarnings.length > 0
+      ? { collectionWarnings: snapshot.collectionWarnings }
+      : {}),
     rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems),
     curatedItems,
     curationDiagnostics,
@@ -334,6 +342,7 @@ export async function runGenerate(
   const formatted = deps.format(selectedItems, formatDateFromUnixSeconds(snapshot.collectedAt));
   const report = buildSelectionReport(
     formatted.date,
+    snapshot.collectionWarnings,
     rankedItems,
     candidateItems,
     curatedItems,

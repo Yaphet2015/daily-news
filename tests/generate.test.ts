@@ -198,6 +198,38 @@ test('runGenerate writes curation diagnostics into the selection report when cur
   assert.deepEqual((publishedReport as { curationDiagnostics?: CurationDiagnostics }).curationDiagnostics, diagnostics);
 });
 
+test('runGenerate writes collection warnings into the selection report', async () => {
+  let publishedReport: unknown;
+
+  await runGenerate({
+    readDraft: async () => null,
+    collect: async () => createSnapshot({ collectionWarnings: ['recommendation feed skipped'] }),
+    writeDraft: async () => {},
+    clearDraft: async () => {},
+    readState: async () => ({
+      sources: {
+        twitter: { lastPublishedTime: 100 },
+        substack: { lastPublishedTime: 0 },
+      },
+    }),
+    writeState: async () => {},
+    attachReaderBriefs: async (items) => items,
+    rankItems: (items) => items as never,
+    selectCandidatePool: (items) => items as never,
+    curate: async () => [createCuratedItem()],
+    select: async (items) => items,
+    format: (items, date) => ({ date, obsidian: `obsidian:${items.length}`, substack: 'substack' }),
+    publish: async (_formatted, report) => {
+      publishedReport = report;
+    },
+    log: () => {},
+  });
+
+  assert.deepEqual((publishedReport as { collectionWarnings?: string[] }).collectionWarnings, [
+    'recommendation feed skipped',
+  ]);
+});
+
 test('runGenerate writes curation diagnostics into review packets when curate returns diagnostics', async () => {
   let reviewPacket: ReviewPacket | undefined;
   const diagnostics = createCurationDiagnostics();
@@ -238,6 +270,44 @@ test('runGenerate writes curation diagnostics into review packets when curate re
   );
 
   assert.deepEqual(reviewPacket?.curationDiagnostics, diagnostics);
+});
+
+test('runGenerate writes collection warnings into review packets', async () => {
+  let reviewPacket: ReviewPacket | undefined;
+
+  await runGenerate(
+    {
+      readDraft: async () => createDraft({ collectionWarnings: ['recommendation feed skipped'] }),
+      collect: async () => createSnapshot({ items: [] }),
+      writeDraft: async () => {},
+      clearDraft: async () => {},
+      readState: async () => ({
+        sources: {
+          twitter: { lastPublishedTime: 100 },
+          substack: { lastPublishedTime: 0 },
+        },
+      }),
+      writeState: async () => {},
+      attachReaderBriefs: async (items) => items,
+      rankItems: (items) => items as never,
+      selectCandidatePool: (items) => items as never,
+      curate: async () => [createCuratedItem()],
+      select: async (items) => items,
+      format: (items, date) => ({ date, obsidian: 'obsidian', substack: 'substack' }),
+      publish: async () => {},
+      writeReviewPacket: async (packet) => {
+        reviewPacket = packet;
+        return {
+          jsonPath: '/tmp/2024-03-09-review.json',
+          markdownPath: '/tmp/2024-03-09-review.md',
+        };
+      },
+      log: () => {},
+    },
+    { mode: 'review' },
+  );
+
+  assert.deepEqual(reviewPacket?.collectionWarnings, ['recommendation feed skipped']);
 });
 
 test('parseGenerateOptions detects review diagnose mode without changing review mode parsing', () => {

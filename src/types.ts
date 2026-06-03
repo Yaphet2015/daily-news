@@ -72,6 +72,7 @@ export interface SourceResolution {
 export interface CollectedItem {
   id: string;
   source: SourceName;
+  twitterFeed?: 'list' | 'for-you';
   kind?: CollectedItemKind;
   url: string;
   originUrl?: string;
@@ -186,6 +187,7 @@ export interface FormatResult {
 
 export interface SelectionReport {
   date: string;
+  collectionWarnings?: string[];
   curationDiagnostics?: CurationDiagnostics;
   rankedItems: RankedItem[];
   curatedItems: CuratedItem[];
@@ -196,6 +198,7 @@ export interface ReviewPacket {
   date: string;
   collectedAt: number;
   enabledSources: SourceName[];
+  collectionWarnings?: string[];
   rankedItems: RankedItem[];
   curatedItems: CuratedItem[];
   curationDiagnostics?: CurationDiagnostics;
@@ -221,6 +224,7 @@ export interface RunState {
 export interface CollectionSnapshot {
   collectedAt: number;
   enabledSources: SourceName[];
+  collectionWarnings?: string[];
   items: CollectedItem[];
 }
 

@@ -1,5 +1,10 @@
 import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { confirm, input } from '@inquirer/prompts';
+import { createOpenAI } from '@ai-sdk/openai';
+import { generateText } from 'ai';
+import OpenAI from 'openai';
+import WebSocket from 'ws';
 import type {
   CollectionSnapshot,
   CollectedItem,
@@ -25,6 +30,9 @@ const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
 const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
+const DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS = 500;
+const DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT = 'http://127.0.0.1:9222';
+const DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL = 'gpt-4o-mini';
 
 interface TwitterCliTweet {
   id: string;
@@ -47,6 +55,12 @@ interface TwitterCliTweet {
   replyCount?: number;
   repostCount?: number;
   quoteCount?: number;
+  metrics?: {
+    likes?: number;
+    replies?: number;
+    retweets?: number;
+    quotes?: number;
+  };
   articleTitle?: string;
   articleText?: string;
   quotedTweet?: {
@@ -158,7 +172,12 @@ interface SubstackClientLike {
   ownProfile(): Promise<SubstackOwnProfileLike>;
 }
 
-type SourceCollector = (sinceTime: number) => Promise<CollectedItem[]>;
+interface SourceCollectionResult {
+  items: CollectedItem[];
+  warnings?: string[];
+}
+
+type SourceCollector = (sinceTime: number) => Promise<CollectedItem[] | SourceCollectionResult>;
 
 interface CollectSourcesOptions {
   enabledSources: SourceName[];
@@ -184,6 +203,52 @@ interface DiagnoseCollectEnvironmentDeps {
   execTwitterCliCommand?: typeof execTwitterCliCommand;
   log?: (message: string) => void;
 }
+
+interface TwitterRecommendationAuth {
+  authToken: string;
+  ct0: string;
+}
+
+interface CdpCookie {
+  name?: string;
+  value?: string;
+  domain?: string;
+}
+
+interface CdpCookieResponse {
+  cookies?: CdpCookie[];
+}
+
+interface CdpTarget {
+  type?: string;
+  url?: string;
+  webSocketDebuggerUrl?: string;
+}
+
+interface FetchTwitterRecommendationAuthFromCdpOptions {
+  endpoint?: string;
+  fetchJson?: (url: string) => Promise<unknown>;
+  sendCdpCommand?: (webSocketUrl: string, method: string) => Promise<unknown>;
+}
+
+interface CollectTwitterRecommendationItemsOptions {
+  maxTweets?: number;
+  fetchRecommendationAuth?: () => Promise<TwitterRecommendationAuth | null>;
+  chooseRecommendationLoginRetry?: () => Promise<boolean>;
+  execTwitterCliCommand?: typeof execTwitterCliCommand;
+  topicGate?: RecommendationTopicGate;
+  warn?: (message: string) => void;
+}
+
+interface RecommendationTopicGateCandidate {
+  id: string;
+  author: string;
+  username?: string;
+  url: string;
+  textPreview: string;
+}
+
+type RecommendationTopicGate = (items: RecommendationTopicGateCandidate[]) => Promise<Set<string>>;
 
 interface PublicSubstackFeed {
   publication: Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>> & {
@@ -1063,6 +1128,17 @@ export function buildTwitterCliCommand(listId: string, maxTweets: number, proxy:
   return `${proxyPrefix}twitter list ${listId} --max ${maxTweets} --json`;
 }
 
+export function buildTwitterFeedCommand(
+  feedType: 'for-you' | 'following',
+  maxTweets: number,
+  proxy: string | undefined,
+  auth?: TwitterRecommendationAuth,
+): string {
+  const proxyPrefix = buildTwitterCliEnvPrefix(proxy);
+  const authPrefix = auth ? `TWITTER_AUTH_TOKEN=${auth.authToken} TWITTER_CT0=${auth.ct0} ` : '';
+  return `${proxyPrefix}${authPrefix}twitter feed --type ${feedType} --max ${maxTweets} --json`;
+}
+
 function buildTwitterReplyCommand(tweetId: string, maxReplies: number, proxy: string | undefined): string {
   const proxyPrefix = buildTwitterCliEnvPrefix(proxy);
   return `${proxyPrefix}twitter tweet ${tweetId} --max ${maxReplies} --json`;
@@ -1237,6 +1313,258 @@ async function execTwitterCliCommand(command: string, maxBuffer: number): Promis
     return await execAsync(command, { maxBuffer });
   } catch (error) {
     throw new Error(summarizeTwitterCliError(error), { cause: error instanceof Error ? error : undefined });
+  }
+}
+
+async function defaultFetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`CDP 请求失败: ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+async function sendCdpCommand(webSocketUrl: string, method: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(webSocketUrl);
+    const requestId = 1;
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error(`CDP ${method} 超时`));
+    }, 5000);
+
+    socket.on('open', () => {
+      socket.send(JSON.stringify({ id: requestId, method }));
+    });
+
+    socket.on('message', (raw) => {
+      let message: { id?: number; result?: unknown; error?: { message?: string } };
+      try {
+        message = JSON.parse(raw.toString());
+      } catch (error) {
+        clearTimeout(timer);
+        socket.close();
+        reject(error);
+        return;
+      }
+
+      if (message.id !== requestId) return;
+      clearTimeout(timer);
+      socket.close();
+
+      if (message.error) {
+        reject(new Error(message.error.message ?? `CDP ${method} failed`));
+        return;
+      }
+
+      resolve(message.result);
+    });
+
+    socket.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function isTwitterCookieDomain(domain: string | undefined): boolean {
+  const normalized = domain?.trim().replace(/^\./, '').toLowerCase();
+  return Boolean(
+    normalized &&
+      (normalized === 'x.com' ||
+        normalized === 'twitter.com' ||
+        normalized.endsWith('.x.com') ||
+        normalized.endsWith('.twitter.com')),
+  );
+}
+
+function extractTwitterRecommendationAuth(cookies: CdpCookie[]): TwitterRecommendationAuth | null {
+  const authToken = cookies.find((cookie) => cookie.name === 'auth_token' && isTwitterCookieDomain(cookie.domain))?.value;
+  const ct0 = cookies.find((cookie) => cookie.name === 'ct0' && isTwitterCookieDomain(cookie.domain))?.value;
+
+  return authToken && ct0 ? { authToken, ct0 } : null;
+}
+
+async function fetchAuthFromCdpTarget(
+  webSocketUrl: string | undefined,
+  sendCommand: (webSocketUrl: string, method: string) => Promise<unknown>,
+): Promise<TwitterRecommendationAuth | null> {
+  if (!webSocketUrl) return null;
+  const rawCookies = await sendCommand(webSocketUrl, 'Network.getAllCookies');
+  const cookies = rawCookies && typeof rawCookies === 'object'
+    ? (rawCookies as CdpCookieResponse).cookies
+    : undefined;
+  return Array.isArray(cookies) ? extractTwitterRecommendationAuth(cookies) : null;
+}
+
+function isXPageTarget(target: CdpTarget): boolean {
+  if (target.type !== 'page') return false;
+  try {
+    const url = new URL(target.url ?? '');
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+    return host === 'x.com' || host === 'twitter.com';
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchTwitterRecommendationAuthFromCdp({
+  endpoint = DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT,
+  fetchJson = defaultFetchJson,
+  sendCdpCommand: sendCommand = sendCdpCommand,
+}: FetchTwitterRecommendationAuthFromCdpOptions = {}): Promise<TwitterRecommendationAuth | null> {
+  try {
+    const normalizedEndpoint = endpoint.replace(/\/+$/, '');
+    const version = await fetchJson(`${normalizedEndpoint}/json/version`);
+    const webSocketUrl =
+      version && typeof version === 'object'
+        ? (version as { webSocketDebuggerUrl?: string }).webSocketDebuggerUrl
+        : undefined;
+    let browserAuth: TwitterRecommendationAuth | null = null;
+    try {
+      browserAuth = await fetchAuthFromCdpTarget(webSocketUrl, sendCommand);
+    } catch {
+      browserAuth = null;
+    }
+    if (browserAuth) return browserAuth;
+
+    const targets = await fetchJson(`${normalizedEndpoint}/json/list`);
+    if (!Array.isArray(targets)) return null;
+
+    for (const target of targets) {
+      if (!target || typeof target !== 'object' || !isXPageTarget(target as CdpTarget)) continue;
+      let pageAuth: TwitterRecommendationAuth | null = null;
+      try {
+        pageAuth = await fetchAuthFromCdpTarget((target as CdpTarget).webSocketDebuggerUrl, sendCommand);
+      } catch {
+        pageAuth = null;
+      }
+      if (pageAuth) return pageAuth;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function chooseRecommendationLoginRetry(): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+
+  const shouldRetry = await confirm({
+    message: '未检测到 CDP 浏览器中的 X 推荐流账号登录。是否现在登录后重试推荐流采集？',
+    default: false,
+  });
+  if (!shouldRetry) return false;
+
+  await input({
+    message: '请在 9222 端口的 CDP Chrome 中完成 X 登录，然后按回车重试推荐流采集。',
+  });
+  return true;
+}
+
+function stripJsonFences(raw: string): string {
+  return raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+}
+
+function buildRecommendationTopicGateCandidates(items: CollectedItem[]): RecommendationTopicGateCandidate[] {
+  return items.map((item) => ({
+    id: item.id,
+    author: item.author.name,
+    username: item.author.username,
+    url: item.originUrl ?? item.url,
+    textPreview: item.text.slice(0, 500),
+  }));
+}
+
+function parseRecommendationTopicGateResponse(raw: string, knownIds: Set<string>): Set<string> {
+  const parsed = JSON.parse(stripJsonFences(raw)) as {
+    items?: Array<{ id?: unknown; isAiRelated?: unknown }>;
+  };
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  return new Set(
+    items.flatMap((item) =>
+      typeof item.id === 'string' && knownIds.has(item.id) && item.isAiRelated === true
+        ? [item.id]
+        : [],
+    ),
+  );
+}
+
+async function generateRecommendationTopicGateJson(candidates: RecommendationTopicGateCandidate[]): Promise<string> {
+  const model =
+    process.env.TWITTER_RECOMMENDATION_FILTER_MODEL ??
+    (process.env.OPENAI_API_KEY
+      ? DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL
+      : process.env.AI_MODEL ?? DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL);
+  const systemPrompt = [
+    'You classify X recommendation posts for an AI daily news pipeline.',
+    'Return strict JSON only.',
+    'The top-level object must contain exactly one field named items.',
+    'Each item must include id, isAiRelated, and reason.',
+    'Mark true only for AI models, AI products, agents, developer tools for AI, ML research, AI infrastructure, benchmarks, or AI industry structure.',
+    'Mark false for general tech, generic productivity, mobile apps, jokes, hiring, or vague commentary without AI relevance.',
+  ].join(' ');
+  const userContent = [
+    'Classify whether each X recommendation post is AI-related enough to enter an AI daily-news pipeline.',
+    'Only use the provided 500-character preview. Do not infer beyond it.',
+    '',
+    JSON.stringify({ items: candidates }, null, 2),
+  ].join('\n');
+
+  if (process.env.OPENAI_API_KEY) {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const response = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      response_format: { type: 'json_object' },
+    });
+    const content = response.choices[0]?.message?.content;
+    return typeof content === 'string' ? content : '';
+  }
+
+  if (process.env.AI_BASE_URL && process.env.AI_API_KEY) {
+    const openai = createOpenAI({
+      baseURL: process.env.AI_BASE_URL,
+      apiKey: process.env.AI_API_KEY,
+    });
+    const result = await generateText({
+      model: openai(model),
+      system: systemPrompt,
+      prompt: userContent,
+    });
+    return result.text;
+  }
+
+  throw new Error('AI 配置缺失：请在 .env 中设置 OPENAI_API_KEY，或同时设置 AI_BASE_URL 和 AI_API_KEY');
+}
+
+async function runRecommendationTopicGate(candidates: RecommendationTopicGateCandidate[]): Promise<Set<string>> {
+  if (candidates.length === 0) return new Set();
+  const raw = await generateRecommendationTopicGateJson(candidates);
+  return parseRecommendationTopicGateResponse(raw, new Set(candidates.map((item) => item.id)));
+}
+
+export async function filterAiRelatedRecommendationItems(
+  items: CollectedItem[],
+  topicGate: RecommendationTopicGate = runRecommendationTopicGate,
+  warn: (message: string) => void = console.warn,
+): Promise<SourceCollectionResult> {
+  if (items.length === 0) return { items: [] };
+  const candidates = buildRecommendationTopicGateCandidates(items);
+
+  try {
+    const acceptedIds = await topicGate(candidates);
+    return {
+      items: items.filter((item) => acceptedIds.has(item.id)),
+    };
+  } catch (error) {
+    const warning = `推荐流 AI 相关性预筛失败，已跳过推荐流: ${summarizeError(error)}`;
+    warn(`[collect] ${warning}`);
+    return { items: [], warnings: [warning] };
   }
 }
 
@@ -1901,6 +2229,81 @@ async function collectViaCli(listId: string, maxTweets: number): Promise<Collect
   return result.data.map(mapTwitterCliTweet);
 }
 
+export async function collectTwitterRecommendationItems(
+  sinceTime: number,
+  {
+    maxTweets = DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS,
+    fetchRecommendationAuth = () =>
+      fetchTwitterRecommendationAuthFromCdp({
+        endpoint: process.env.TWITTER_RECOMMENDATION_CDP_ENDPOINT ?? DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT,
+      }),
+    chooseRecommendationLoginRetry: chooseLoginRetry = chooseRecommendationLoginRetry,
+    execTwitterCliCommand: runTwitterCliCommand = execTwitterCliCommand,
+    topicGate,
+    warn = console.warn,
+  }: CollectTwitterRecommendationItemsOptions = {},
+): Promise<SourceCollectionResult> {
+  const warnings: string[] = [];
+  let auth = await fetchRecommendationAuth();
+
+  if (!auth && await chooseLoginRetry()) {
+    auth = await fetchRecommendationAuth();
+  }
+
+  if (!auth) {
+    const warning = '未检测到 CDP 浏览器中的 X 登录，跳过推荐流采集';
+    warnings.push(warning);
+    warn(`[collect] ${warning}`);
+    return { items: [], warnings };
+  }
+
+  const proxy = resolveHttpProxy();
+  const command = buildTwitterFeedCommand('for-you', maxTweets, proxy, auth);
+  logCollectDiagnostic(`twitter recommendation command=${redactCollectDiagnosticCommand(command)}`);
+
+  let stdout: string;
+  let stderr: string;
+  try {
+    const result = await runTwitterCliCommand(command, 50 * 1024 * 1024);
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    const warning = `推荐流采集失败，已跳过: ${summarizeTwitterCliError(error)}`;
+    warnings.push(warning);
+    warn(`[collect] ${warning}`);
+    return { items: [], warnings };
+  }
+
+  if (stderr && !stderr.includes('Getting Twitter cookies')) {
+    console.warn(`[collect] twitter-feed stderr: ${stderr}`);
+  }
+
+  let result: TwitterCliOutput;
+  try {
+    result = JSON.parse(stdout) as TwitterCliOutput;
+  } catch (error) {
+    const warning = `推荐流采集失败，已跳过: ${summarizeError(error)}`;
+    warnings.push(warning);
+    warn(`[collect] ${warning}`);
+    return { items: [], warnings };
+  }
+
+  if (!result.ok) {
+    const warning = '推荐流采集失败，已跳过: twitter-cli returned ok=false';
+    warnings.push(warning);
+    warn(`[collect] ${warning}`);
+    return { items: [], warnings };
+  }
+
+  const items = filterSinceTime(result.data.map(mapTwitterCliTweet), sinceTime)
+    .map((item) => ({ ...item, twitterFeed: 'for-you' as const }));
+  const filtered = await filterAiRelatedRecommendationItems(items, topicGate, warn);
+  return {
+    items: filtered.items,
+    warnings: [...warnings, ...(filtered.warnings ?? [])],
+  };
+}
+
 async function collectViaApi(
   listId: string,
   sinceTime: number,
@@ -2157,16 +2560,25 @@ export async function resolveTwitterPrimarySources(
   return results;
 }
 
-async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> {
+function normalizeSourceCollectionResult(result: CollectedItem[] | SourceCollectionResult): SourceCollectionResult {
+  return Array.isArray(result) ? { items: result } : result;
+}
+
+function shouldCollectTwitterRecommendations(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.ENABLE_TWITTER_RECOMMENDATIONS?.trim().toLowerCase();
+  return raw !== '0' && raw !== 'false' && raw !== 'no';
+}
+
+async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionResult> {
   const listId = resolveTwitterListId();
   console.log(
     `[collect] 采集 Twitter listId=${listId}，sinceTime=${new Date(sinceTime * 1000).toLocaleString('zh-CN')}`,
   );
 
-  let items: CollectedItem[];
+  let listItems: CollectedItem[];
 
   try {
-    items = await collectViaCli(listId, MAX_TWEETS);
+    listItems = await collectViaCli(listId, MAX_TWEETS);
   } catch (cliError) {
     logCollectDiagnostic(`twitter-cli failed error=${summarizeDiagnosticError(cliError)}`);
     console.warn(`[collect] twitter-cli 失败: ${cliError}`);
@@ -2177,10 +2589,21 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
     }
 
     console.log('[collect] 回退到 twitterapi.io...');
-    items = await collectViaApi(listId, sinceTime, MAX_TWEETS);
+    listItems = await collectViaApi(listId, sinceTime, MAX_TWEETS);
   }
 
-  const filtered = filterSinceTime(items, sinceTime);
+  const recommendationResult = shouldCollectTwitterRecommendations()
+    ? await collectTwitterRecommendationItems(sinceTime, {
+        maxTweets: parsePositiveInt(
+          process.env.TWITTER_RECOMMENDATION_MAX_TWEETS,
+          DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS,
+        ),
+      })
+    : { items: [], warnings: [] };
+  const filtered = [
+    ...filterSinceTime(listItems, sinceTime).map((item) => ({ ...item, twitterFeed: 'list' as const })),
+    ...recommendationResult.items,
+  ];
   const collapsed = collapseNumberedSelfThreads(filtered);
   const sharedShortUrlResolver = createShortUrlResolver();
   const resolved = await resolveTwitterPrimarySources(collapsed, {
@@ -2190,7 +2613,10 @@ async function collectTwitterItems(sinceTime: number): Promise<CollectedItem[]> 
       }),
   });
   console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);
-  return sortNewestFirst(resolved);
+  return {
+    items: sortNewestFirst(resolved),
+    warnings: recommendationResult.warnings,
+  };
 }
 
 export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
@@ -2212,10 +2638,10 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
           return normalized ? [normalized] : [];
         })
       : [],
-    likeCount: toOptionalNumber(tweet.likeCount),
-    replyCount: toOptionalNumber(tweet.replyCount),
-    repostCount: toOptionalNumber(tweet.repostCount),
-    quoteCount: toOptionalNumber(tweet.quoteCount),
+    likeCount: toOptionalNumber(tweet.likeCount) ?? toOptionalNumber(tweet.metrics?.likes),
+    replyCount: toOptionalNumber(tweet.replyCount) ?? toOptionalNumber(tweet.metrics?.replies),
+    repostCount: toOptionalNumber(tweet.repostCount) ?? toOptionalNumber(tweet.metrics?.retweets),
+    quoteCount: toOptionalNumber(tweet.quoteCount) ?? toOptionalNumber(tweet.metrics?.quotes),
   };
 }
 
@@ -2369,9 +2795,12 @@ export async function collectSources({
   );
 
   const mergedItems: CollectedItem[] = [];
+  const collectionWarnings: string[] = [];
   for (const result of sourceResults) {
     if (result.status === 'fulfilled') {
-      mergedItems.push(...result.value.items);
+      const sourceResult = normalizeSourceCollectionResult(result.value.items);
+      mergedItems.push(...sourceResult.items);
+      collectionWarnings.push(...(sourceResult.warnings ?? []));
     } else {
       console.warn(`[collect] 数据源采集失败: ${summarizeError(result.reason)}`);
     }
@@ -2380,6 +2809,7 @@ export async function collectSources({
   return {
     collectedAt: nowSeconds,
     enabledSources,
+    ...(collectionWarnings.length > 0 ? { collectionWarnings: Array.from(new Set(collectionWarnings)) } : {}),
     items: sortNewestFirst(mergedItems),
   };
 }
