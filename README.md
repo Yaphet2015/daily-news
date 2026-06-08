@@ -84,10 +84,10 @@ npm run generate:review:diagnose
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 | `ENABLE_TWITTER_RECOMMENDATIONS` | 否 | 是否额外采集 X For You 推荐流，默认启用；设为 `false` / `0` / `no` 可关闭 |
 | `TWITTER_RECOMMENDATION_CDP_ENDPOINT` | 否 | 推荐流专用账号所在的 CDP Chrome 地址，默认 `http://127.0.0.1:9222` |
-| `TWITTER_RECOMMENDATION_MAX_TWEETS` | 否 | 每次最多拉取多少条推荐流，默认 `500` |
+| `TWITTER_RECOMMENDATION_MAX_TWEETS` | 否 | 每次最多拉取多少条推荐流，默认 `200`；如果 X 返回分页 `Query: Unspecified`，会降级重试最近 `20` 条并记录 warning |
 | `TWITTER_RECOMMENDATION_FILTER_MODEL` | 否 | 推荐流 AI 相关性预筛模型，默认 `gpt-4o-mini` |
 
-说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。X List 继续使用 `twitter-cli` 的默认认证路径；X For You 推荐流每次从 CDP Chrome 读取专用新账号的 `auth_token` / `ct0` 并临时注入子进程，不写入 `.env`。如果未检测到 CDP 浏览器登录，交互运行会询问是否现在登录后重试；选择不重试或非交互运行时，会跳过推荐流并在 review / selection report 中记录 warning。`twitter-cli` 在失败时可能把结构化错误写到 `stdout`、把诊断 warning 写到 `stderr`；项目会优先展示结构化错误消息，便于排查认证和代理问题。
+说明：Twitter 外链页面抓取仅用于补充上下文，属于 best-effort；如果目标站点屏蔽抓取、限流或超时，会跳过外链解析并保留原始 tweet。X List 继续使用 `twitter-cli` 的默认认证路径；X For You 推荐流每次从 CDP Chrome 读取专用新账号的 `auth_token` / `ct0` 并临时注入子进程，不写入 `.env`。如果未检测到 CDP 浏览器登录，交互运行会询问是否现在登录后重试；选择不重试或非交互运行时，会跳过推荐流并在 review / selection report 中记录 warning。如果 `twitter-cli` 的推荐流分页返回 `Query: Unspecified`，会改用最近 `20` 条继续采集，并把降级原因写入 warning。`twitter-cli` 在失败时可能把结构化错误写到 `stdout`、把诊断 warning 写到 `stderr`；项目会优先展示结构化错误消息，便于排查认证和代理问题。
 
 **获取 twitterapi.io API Key：**
 1. 前往 [https://twitterapi.io](https://twitterapi.io) 注册账号

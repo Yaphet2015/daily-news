@@ -516,6 +516,41 @@ test('fetchTwitterRecommendationAuthFromCdp extracts auth_token and ct0 from CDP
   });
 });
 
+test('fetchTwitterRecommendationAuthFromCdp reads browser cookies through Storage when Network is unavailable', async () => {
+  const fetchTwitterRecommendationAuthFromCdp = (collectModule as Record<string, Function>)
+    .fetchTwitterRecommendationAuthFromCdp;
+  const commandCalls: string[] = [];
+
+  const auth = await fetchTwitterRecommendationAuthFromCdp({
+    fetchJson: async (url: string) => {
+      if (url.endsWith('/json/version')) {
+        return { webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/1' };
+      }
+      if (url.endsWith('/json/list')) return [];
+      throw new Error(`unexpected url: ${url}`);
+    },
+    sendCdpCommand: async (webSocketUrl: string, method: string) => {
+      commandCalls.push(`${webSocketUrl} ${method}`);
+      if (method === 'Network.getAllCookies') throw new Error("'Network.getAllCookies' wasn't found");
+      return {
+        cookies: [
+          { name: 'auth_token', value: 'storage-auth', domain: '.x.com' },
+          { name: 'ct0', value: 'storage-ct0', domain: '.x.com' },
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(auth, {
+    authToken: 'storage-auth',
+    ct0: 'storage-ct0',
+  });
+  assert.deepEqual(commandCalls, [
+    'ws://127.0.0.1:9222/devtools/browser/1 Network.getAllCookies',
+    'ws://127.0.0.1:9222/devtools/browser/1 Storage.getCookies',
+  ]);
+});
+
 test('fetchTwitterRecommendationAuthFromCdp falls back to an open X page target', async () => {
   const fetchTwitterRecommendationAuthFromCdp = (collectModule as Record<string, Function>)
     .fetchTwitterRecommendationAuthFromCdp;
@@ -555,6 +590,7 @@ test('fetchTwitterRecommendationAuthFromCdp falls back to an open X page target'
   });
   assert.deepEqual(commandCalls, [
     'ws://127.0.0.1:9222/devtools/browser/1 Network.getAllCookies',
+    'ws://127.0.0.1:9222/devtools/browser/1 Storage.getCookies',
     'ws://127.0.0.1:9222/devtools/page/x-home Network.getAllCookies',
   ]);
 });
@@ -581,6 +617,86 @@ test('collectTwitterRecommendationItems skips recommendation feed when CDP has n
   assert.equal(result.warnings.length, 1);
   assert.match(result.warnings[0], /未检测到 CDP 浏览器中的 X 登录/);
   assert.match(warnings[0], /跳过推荐流/);
+});
+
+test('collectTwitterRecommendationItems defaults to 200 recommendations to avoid oversized X pagination', async () => {
+  const collectTwitterRecommendationItems = (collectModule as Record<string, Function>)
+    .collectTwitterRecommendationItems;
+  const commands: string[] = [];
+
+  const result = await collectTwitterRecommendationItems(0, {
+    fetchRecommendationAuth: async () => ({ authToken: 'recommend-auth', ct0: 'recommend-ct0' }),
+    execTwitterCliCommand: async (command: string) => {
+      commands.push(command);
+      return {
+        stderr: '',
+        stdout: JSON.stringify({
+          ok: true,
+          data: [
+            {
+              id: 'recommend-1',
+              text: 'An AI infrastructure launch.',
+              author: { id: 'user-1', name: 'Alice', screenName: 'alice' },
+              createdAt: '2026-03-15T09:00:00Z',
+              media: [],
+            },
+          ],
+        }),
+      };
+    },
+    topicGate: async (items: Array<{ id: string }>) => new Set(items.map((item) => item.id)),
+  });
+
+  assert.equal(commands.length, 1);
+  assert.match(commands[0] ?? '', /twitter feed --type for-you --max 200 --json/);
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['recommend-1']);
+});
+
+test('collectTwitterRecommendationItems retries with a single page when twitter-cli pagination fails', async () => {
+  const collectTwitterRecommendationItems = (collectModule as Record<string, Function>)
+    .collectTwitterRecommendationItems;
+  const commands: string[] = [];
+  const warnings: string[] = [];
+
+  const paginationError = new Error('twitter-cli failed') as Error & { stdout?: string };
+  paginationError.stdout = JSON.stringify({
+    ok: false,
+    error: {
+      message: 'Twitter API error (HTTP 0): Twitter API returned errors: Query: Unspecified',
+    },
+  });
+
+  const result = await collectTwitterRecommendationItems(0, {
+    maxTweets: 500,
+    fetchRecommendationAuth: async () => ({ authToken: 'recommend-auth', ct0: 'recommend-ct0' }),
+    execTwitterCliCommand: async (command: string) => {
+      commands.push(command);
+      if (command.includes('--max 500')) throw paginationError;
+      assert.match(command, /--max 20\b/);
+      return {
+        stderr: '',
+        stdout: JSON.stringify({
+          ok: true,
+          data: [
+            {
+              id: 'recommend-1',
+              text: 'An AI infrastructure launch.',
+              author: { id: 'user-1', name: 'Alice', screenName: 'alice' },
+              createdAt: '2026-03-15T09:00:00Z',
+              media: [],
+            },
+          ],
+        }),
+      };
+    },
+    topicGate: async (items: Array<{ id: string }>) => new Set(items.map((item) => item.id)),
+    warn: (message: string) => warnings.push(message),
+  });
+
+  assert.deepEqual(commands.map((command) => command.match(/--max \d+/)?.[0]), ['--max 500', '--max 20']);
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['recommend-1']);
+  assert.match(result.warnings?.[0] ?? '', /改用最近 20 条/);
+  assert.match(warnings[0] ?? '', /改用最近 20 条/);
 });
 
 test('filterAiRelatedRecommendationItems sends only 500-character previews and keeps AI-related recommendations', async () => {

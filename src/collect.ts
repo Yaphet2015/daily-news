@@ -30,7 +30,8 @@ const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
 const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
-const DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS = 500;
+const DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS = 200;
+const FALLBACK_TWITTER_RECOMMENDATION_MAX_TWEETS = 20;
 const DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT = 'http://127.0.0.1:9222';
 const DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL = 'gpt-4o-mini';
 
@@ -1308,6 +1309,10 @@ export function summarizeTwitterCliError(error: unknown): string {
   return summarizeError(error);
 }
 
+function isTwitterCliQueryUnspecifiedError(message: string): boolean {
+  return /Twitter API returned errors:\s*Query:\s*Unspecified/i.test(message);
+}
+
 async function execTwitterCliCommand(command: string, maxBuffer: number): Promise<{ stdout: string; stderr: string }> {
   try {
     return await execAsync(command, { maxBuffer });
@@ -1390,11 +1395,19 @@ async function fetchAuthFromCdpTarget(
   sendCommand: (webSocketUrl: string, method: string) => Promise<unknown>,
 ): Promise<TwitterRecommendationAuth | null> {
   if (!webSocketUrl) return null;
-  const rawCookies = await sendCommand(webSocketUrl, 'Network.getAllCookies');
-  const cookies = rawCookies && typeof rawCookies === 'object'
-    ? (rawCookies as CdpCookieResponse).cookies
-    : undefined;
-  return Array.isArray(cookies) ? extractTwitterRecommendationAuth(cookies) : null;
+  for (const method of ['Network.getAllCookies', 'Storage.getCookies']) {
+    try {
+      const rawCookies = await sendCommand(webSocketUrl, method);
+      const cookies = rawCookies && typeof rawCookies === 'object'
+        ? (rawCookies as CdpCookieResponse).cookies
+        : undefined;
+      const auth = Array.isArray(cookies) ? extractTwitterRecommendationAuth(cookies) : null;
+      if (auth) return auth;
+    } catch {
+      // Browser targets expose Storage.getCookies, while page targets may expose Network.getAllCookies.
+    }
+  }
+  return null;
 }
 
 function isXPageTarget(target: CdpTarget): boolean {
@@ -2268,10 +2281,31 @@ export async function collectTwitterRecommendationItems(
     stdout = result.stdout;
     stderr = result.stderr;
   } catch (error) {
-    const warning = `推荐流采集失败，已跳过: ${summarizeTwitterCliError(error)}`;
-    warnings.push(warning);
-    warn(`[collect] ${warning}`);
-    return { items: [], warnings };
+    const summary = summarizeTwitterCliError(error);
+    const fallbackMaxTweets = Math.min(FALLBACK_TWITTER_RECOMMENDATION_MAX_TWEETS, maxTweets);
+    if (fallbackMaxTweets < maxTweets && isTwitterCliQueryUnspecifiedError(summary)) {
+      const fallbackWarning = `推荐流采集触发 X 分页错误，已改用最近 ${fallbackMaxTweets} 条: ${summary}`;
+      warnings.push(fallbackWarning);
+      warn(`[collect] ${fallbackWarning}`);
+
+      const fallbackCommand = buildTwitterFeedCommand('for-you', fallbackMaxTweets, proxy, auth);
+      logCollectDiagnostic(`twitter recommendation fallback command=${redactCollectDiagnosticCommand(fallbackCommand)}`);
+      try {
+        const result = await runTwitterCliCommand(fallbackCommand, 50 * 1024 * 1024);
+        stdout = result.stdout;
+        stderr = result.stderr;
+      } catch (fallbackError) {
+        const warning = `推荐流采集失败，已跳过: ${summarizeTwitterCliError(fallbackError)}`;
+        warnings.push(warning);
+        warn(`[collect] ${warning}`);
+        return { items: [], warnings };
+      }
+    } else {
+      const warning = `推荐流采集失败，已跳过: ${summary}`;
+      warnings.push(warning);
+      warn(`[collect] ${warning}`);
+      return { items: [], warnings };
+    }
   }
 
   if (stderr && !stderr.includes('Getting Twitter cookies')) {
