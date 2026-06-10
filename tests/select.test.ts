@@ -87,7 +87,7 @@ test('formatSelectionLabel shows both newsletter origin and resolved roundup lin
       url: 'https://example.com/perplexity-labs',
       originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
       author: "Ben's Bites",
-      attribution: "Ben's Bites · News worth knowing",
+      attribution: 'Perplexity launched Labs',
       source: 'substack',
       category: 'Product',
       media: [],
@@ -96,7 +96,7 @@ test('formatSelectionLabel shows both newsletter origin and resolved roundup lin
   );
 
   assert.match(label, /^ 3\. Perplexity 推出 Labs 模式\n/);
-  assert.match(label, /substack · Ben's Bites · News worth knowing · Ben's Bites/);
+  assert.match(label, /substack · Perplexity launched Labs · Ben's Bites/);
   assert.match(label, /原帖: https:\/\/www\.bensbites\.com\/p\/ai-media-goes-mainstream/);
   assert.match(label, /来源: https:\/\/example\.com\/perplexity-labs/);
 });

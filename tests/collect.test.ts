@@ -400,6 +400,7 @@ test("extractSubstackRoundupEntries expands Ben's Bites bullet sections and skip
       '<h3>🥣 Dev dish</h3>',
       '<ul>',
       '<li><p><a href="https://github.com/browser-use/vibetest-use">MCP server</a><span> from Browser Use runs parallel agents to test your vibe-coded app.</span></p></li>',
+      '<li><p><a href="https://example.ai/releases"></a><span>Example AI shipped agent mode.</span></p></li>',
       '<li><p><a href="https://www.bensbites.com/subscribe">Subscribe</a></p></li>',
       '</ul>',
     ].join(''),
@@ -416,12 +417,13 @@ test("extractSubstackRoundupEntries expands Ben's Bites bullet sections and skip
   });
 
   assert.deepEqual(
-    entries.map((entry: { id: string; title: string; url: string; sectionLabel: string; originUrl: string }) => ({
+    entries.map((entry: { id: string; title: string; url: string; sectionLabel: string; originUrl: string; sourceLabel: string }) => ({
       id: entry.id,
       title: entry.title,
       url: entry.url,
       sectionLabel: entry.sectionLabel,
       originUrl: entry.originUrl,
+      sourceLabel: entry.sourceLabel,
     })),
     [
       {
@@ -430,6 +432,7 @@ test("extractSubstackRoundupEntries expands Ben's Bites bullet sections and skip
         url: 'https://x.com/AravSrinivas/status/1',
         sectionLabel: 'News worth knowing',
         originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+        sourceLabel: 'Perplexity launched Labs',
       },
       {
         id: 'substack-parent-1-roundup-dev-dish-1',
@@ -437,9 +440,20 @@ test("extractSubstackRoundupEntries expands Ben's Bites bullet sections and skip
         url: 'https://github.com/browser-use/vibetest-use',
         sectionLabel: 'Dev dish',
         originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+        sourceLabel: 'MCP server',
+      },
+      {
+        id: 'substack-parent-1-roundup-dev-dish-2',
+        title: 'Example AI shipped agent mode.',
+        url: 'https://example.ai/releases',
+        sectionLabel: 'Dev dish',
+        originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+        sourceLabel: 'example.ai',
       },
     ],
   );
+
+  assert.equal(entries.some((entry: { sourceLabel?: string }) => entry.sourceLabel?.includes("Ben's Bites")), false);
 });
 
 test('buildSubstackCurlArgs routes requests through HTTP_PROXY', () => {
@@ -740,6 +754,38 @@ test('filterAiRelatedRecommendationItems sends only 500-character previews and k
   assert.equal(seen[0]?.id, 'ai-1');
   assert.equal(seen[0]?.textPreview.length, 500);
   assert.deepEqual(seen.map((item) => item.id), ['ai-1', 'non-ai-1']);
+});
+
+test('buildRecommendationTopicGatePrompt includes confirmed preference hints without expanding previews', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).buildRecommendationTopicGatePrompt, 'function');
+
+  const buildRecommendationTopicGatePrompt = (collectModule as Record<string, Function>)
+    .buildRecommendationTopicGatePrompt;
+  const prompt = buildRecommendationTopicGatePrompt(
+    [
+      {
+        id: 'ai-1',
+        author: 'Alice',
+        username: 'alice',
+        url: 'https://x.com/alice/status/1',
+        textPreview: `OpenAI released a new agent workflow. ${'x'.repeat(700)}`,
+      },
+    ],
+    {
+      schemaVersion: 1,
+      updatedAt: '2026-06-12T00:00:00.000Z',
+      authorRules: {},
+      domainRules: {},
+      positiveTopicHints: ['hands-on agent workflow'],
+      negativeTopicHints: ['vague launch teaser'],
+    },
+  );
+
+  assert.match(prompt.systemPrompt, /Confirmed reader preference hints/);
+  assert.match(prompt.systemPrompt, /Prefer: hands-on agent workflow/);
+  assert.match(prompt.systemPrompt, /Deprioritize: vague launch teaser/);
+  const parsed = JSON.parse(prompt.userContent.match(/\{\n[\s\S]*\}$/)?.[0] ?? '{}');
+  assert.equal(parsed.items[0]?.textPreview.length, 500);
 });
 
 test('collectSources preserves source collection warnings alongside successful items', async () => {

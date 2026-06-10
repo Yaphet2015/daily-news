@@ -368,3 +368,45 @@ test('rankItems stops marking long-form Substack posts as low quality when a rea
   assert.doesNotMatch(improved?.decisionReasons.join(' ') ?? '', /低质量内容/);
   assert.ok((improved?.priorityScore ?? 0) > (baseline?.priorityScore ?? 0));
 });
+
+test('rankItems applies confirmed local preference rules as explainable adjustments', () => {
+  const ranked = rankItems(
+    [
+      makeTwitterItem({
+        id: 'preferred-author',
+        author: { name: 'Alice', username: 'alice' },
+        text: 'OpenAI released agent workflow docs with migration guidance and benchmark notes https://example.com/a',
+      }),
+      makeTwitterItem({
+        id: 'rejected-domain',
+        author: { name: 'Bob', username: 'bob' },
+        url: 'https://news.example.com/vague',
+        linkedSource: {
+          url: 'https://news.example.com/vague',
+          title: 'Vague launch teaser',
+          description: 'A short teaser',
+          domain: 'news.example.com',
+          via: 'tweet',
+        },
+        sourceResolution: { decision: 'use_linked_source', reason: 'tweet_wrapper' },
+        text: 'OpenAI released agent workflow docs with migration guidance and benchmark notes https://example.com/b',
+      }),
+    ],
+    {
+      schemaVersion: 1,
+      updatedAt: '2026-06-12T00:00:00.000Z',
+      authorRules: {
+        alice: { bonus: 8, reason: 'often selected practical builders' },
+      },
+      domainRules: {
+        'example.com': { penalty: 8, reason: 'often rejected vague syndication' },
+      },
+      positiveTopicHints: [],
+      negativeTopicHints: [],
+    },
+  );
+
+  assert.equal(ranked[0]?.id, 'preferred-author');
+  assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /偏好作者:often selected practical builders/);
+  assert.match(ranked.find((item) => item.id === 'rejected-domain')?.decisionReasons.join(' ') ?? '', /偏好域名:often rejected vague syndication/);
+});

@@ -25,6 +25,15 @@ npm run generate:review
     └─ 保留 pending draft，不复选、不发布、不推进 state.json
 ```
 
+偏好学习闭环：
+
+```bash
+npm run preferences:update
+npm run preferences:review
+```
+
+`generate` 在人工 `select` 确认后会把本次全候选结构化特征和最终选择结果追加到本机私有历史。`preferences:update` 会回填历史 `selection-report` 并生成偏好画像和建议；`preferences:review` 只把你勾选确认的建议写入生效规则，后续 X For You 预筛和 ranking 才会使用这些规则。
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -168,7 +177,8 @@ output/YYYY-MM-DD-substack.html
 2. 系统会保留整篇 Ben's Bites newsletter 作为原始 Substack 条目
 3. 如果文章正文里存在稳定的 `heading + bullet list` roundup 结构，会额外把其中每条 bullet 展开成独立子条目
 4. 展开后的子条目会在 `select` 阶段平铺显示，保留 newsletter 原文链接作为 `originUrl`，并把 bullet 中的外部链接作为最终 `url`
-5. 当前只对仓库显式配置为 roundup 的 publication 启用这套拆分逻辑，不会自动作用于所有 Substack
+5. 面向读者的 `来源` 使用 bullet 外部链接的锚文本；锚文本为空时退回外部链接域名，不显示 Ben's Bites 这条采集渠道
+6. 当前只对仓库显式配置为 roundup 的 publication 启用这套拆分逻辑，不会自动作用于所有 Substack
 
 ---
 
@@ -182,6 +192,10 @@ output/YYYY-MM-DD-substack.html
 | `$OBSIDIAN_VAULT_PATH/YYYY-MM/YYYY-MM-DD-daily-news.md` | Obsidian Markdown（配置后生成） |
 | `data/state.json` | 已成功走完整理并发布到本地输出的最近发布时间游标，用于增量采集 |
 | `data/pending-draft.json` | 采集成功但尚未走完整个发布链路的暂存草稿 |
+| `data/preference-history.jsonl` | 本机私有的人工选择历史，记录每次 select 的全候选结构化特征与选中/未选中结果 |
+| `data/preference-profile.json` | 本机私有的偏好画像，由历史选择汇总生成 |
+| `data/preference-suggestions.json` | 本机私有的待确认偏好建议 |
+| `data/preference-rules.json` | 本机私有、经人工确认后才生效的采集/排序偏好规则 |
 
 ---
 
@@ -204,7 +218,7 @@ output/YYYY-MM-DD-substack.html
 - **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，并与仓库内 pinned publications 合并，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
-- **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接
+- **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接；最终发布的 `来源` 使用 bullet 外部链接的锚文本或域名，而不是 Ben's Bites
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，不再因为单篇文章缺少 caveat/signals 而整次中断
 - **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
 - **推荐流预筛**：X For You scope 更宽，进入 source resolution 和 ranking 前会先用快模型读取每条前 500 字，只保留 AI 模型、AI 产品、agent/devtools、ML research、AI infra、benchmark、AI 行业结构等相关内容
@@ -212,6 +226,7 @@ output/YYYY-MM-DD-substack.html
 - **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认；每个候选项会显示来源、评分提示和最多 3 行摘要预览，便于人工决策
+- **偏好闭环**：人工 `select` 后会记录全候选的结构化特征、正负选择结果和排序/LLM 选择状态；不记录完整正文、HTML、cookie 或 token。历史统计只生成建议，必须通过 `npm run preferences:review` 人工确认后，才会反哺 X For You 预筛提示和 ranking 加降权
 - **审阅包**：自动化模式会额外写出 `output/<date>-review.json` 和 `output/<date>-review.md`，供定时任务汇报和人工预读；如果跳过一天，下一次 09:00 review 会先追加新内容到同一份 pending draft。v1 不做隐藏自动精选，最终 6-10 条仍由人工复选决定
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
 - **固定分组**：发布输出按 `Product`、`Tutorial`、`Opinions/Thoughts` 三组组织，不再展示条目标签
@@ -233,6 +248,8 @@ daily-news/
 │   ├── select.ts      # 交互式人工复选
 │   ├── format.ts      # Obsidian + Substack 格式化
 │   ├── publish.ts     # 输出保存
+│   ├── preferences.ts # 本机私有选择历史、偏好画像、确认规则
+│   ├── preferenceCli.ts # 偏好画像更新与规则确认 CLI
 │   ├── review.ts      # 非交互审阅包输出
 │   ├── state.ts       # 已发布游标状态持久化
 │   └── types.ts       # 共享类型定义

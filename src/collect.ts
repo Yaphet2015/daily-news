@@ -5,6 +5,12 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import OpenAI from 'openai';
 import WebSocket from 'ws';
+import {
+  formatPreferenceHintsForPrompt,
+  normalizeConfirmedPreferenceRules,
+  readConfirmedPreferenceRules,
+  type ConfirmedPreferenceRules,
+} from './preferences.js';
 import type {
   CollectionSnapshot,
   CollectedItem,
@@ -1003,6 +1009,17 @@ function resolveRoundupEntryTitle(
   return leading && leading.length > 0 ? leading : bulletText.slice(0, 120).trim();
 }
 
+function resolveRoundupEntrySourceLabel(anchor: { href: string; text: string }): string {
+  const label = anchor.text.trim();
+  if (label) return label;
+
+  try {
+    return normalizeDomain(new URL(anchor.href).hostname);
+  } catch {
+    return anchor.href;
+  }
+}
+
 export function extractSubstackRoundupEntries(parent: CollectedItem): CollectedItem[] {
   if (
     parent.source !== 'substack' ||
@@ -1050,7 +1067,7 @@ export function extractSubstackRoundupEntries(parent: CollectedItem): CollectedI
         publishedAt: parent.publishedAt,
         author: { ...parent.author },
         publication: parent.publication ? { ...parent.publication } : undefined,
-        sourceLabel: `${parent.publication?.name ?? parent.author.name} · ${sectionLabel}`,
+        sourceLabel: resolveRoundupEntrySourceLabel(externalAnchor),
         media: [],
         forceSelect: true,
       });
@@ -1504,12 +1521,15 @@ function parseRecommendationTopicGateResponse(raw: string, knownIds: Set<string>
   );
 }
 
-async function generateRecommendationTopicGateJson(candidates: RecommendationTopicGateCandidate[]): Promise<string> {
-  const model =
-    process.env.TWITTER_RECOMMENDATION_FILTER_MODEL ??
-    (process.env.OPENAI_API_KEY
-      ? DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL
-      : process.env.AI_MODEL ?? DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL);
+export function buildRecommendationTopicGatePrompt(
+  candidates: RecommendationTopicGateCandidate[],
+  preferenceRules: ConfirmedPreferenceRules = normalizeConfirmedPreferenceRules(null),
+): { systemPrompt: string; userContent: string } {
+  const normalizedCandidates = candidates.map((candidate) => ({
+    ...candidate,
+    textPreview: candidate.textPreview.slice(0, 500),
+  }));
+  const preferenceLines = formatPreferenceHintsForPrompt(preferenceRules);
   const systemPrompt = [
     'You classify X recommendation posts for an AI daily news pipeline.',
     'Return strict JSON only.',
@@ -1517,13 +1537,24 @@ async function generateRecommendationTopicGateJson(candidates: RecommendationTop
     'Each item must include id, isAiRelated, and reason.',
     'Mark true only for AI models, AI products, agents, developer tools for AI, ML research, AI infrastructure, benchmarks, or AI industry structure.',
     'Mark false for general tech, generic productivity, mobile apps, jokes, hiring, or vague commentary without AI relevance.',
+    ...preferenceLines,
   ].join(' ');
   const userContent = [
     'Classify whether each X recommendation post is AI-related enough to enter an AI daily-news pipeline.',
     'Only use the provided 500-character preview. Do not infer beyond it.',
     '',
-    JSON.stringify({ items: candidates }, null, 2),
+    JSON.stringify({ items: normalizedCandidates }, null, 2),
   ].join('\n');
+  return { systemPrompt, userContent };
+}
+
+async function generateRecommendationTopicGateJson(candidates: RecommendationTopicGateCandidate[]): Promise<string> {
+  const model =
+    process.env.TWITTER_RECOMMENDATION_FILTER_MODEL ??
+    (process.env.OPENAI_API_KEY
+      ? DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL
+      : process.env.AI_MODEL ?? DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL);
+  const { systemPrompt, userContent } = buildRecommendationTopicGatePrompt(candidates, readConfirmedPreferenceRules());
 
   if (process.env.OPENAI_API_KEY) {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

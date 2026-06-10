@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseGenerateOptions, runGenerate } from '../src/generate.js';
-import type { CollectionSnapshot, CuratedItem, CurationDiagnostics, PendingDraft, ReviewPacket } from '../src/types.js';
+import type {
+  CollectionSnapshot,
+  CuratedItem,
+  CurationDiagnostics,
+  PendingDraft,
+  ReviewPacket,
+  SelectionReport,
+} from '../src/types.js';
 
 function createSnapshot(overrides: Partial<CollectionSnapshot> = {}): CollectionSnapshot {
   return {
@@ -228,6 +235,52 @@ test('runGenerate writes collection warnings into the selection report', async (
   assert.deepEqual((publishedReport as { collectionWarnings?: string[] }).collectionWarnings, [
     'recommendation feed skipped',
   ]);
+});
+
+test('runGenerate records the final select preference event before publish side effects', async () => {
+  const events: string[] = [];
+  let recordedReport: SelectionReport | undefined;
+
+  await assert.rejects(
+    () =>
+      runGenerate({
+        readDraft: async () => null,
+        collect: async () => createSnapshot(),
+        writeDraft: async () => {},
+        clearDraft: async () => {
+          events.push('clearDraft');
+        },
+        readState: async () => ({
+          sources: {
+            twitter: { lastPublishedTime: 100 },
+            substack: { lastPublishedTime: 0 },
+          },
+        }),
+        writeState: async () => {
+          events.push('writeState');
+        },
+        attachReaderBriefs: async (items) => items,
+        rankItems: (items) => items as never,
+        selectCandidatePool: (items) => items as never,
+        curate: async () => [createCuratedItem()],
+        select: async (items) => items,
+        format: (items, date) => ({ date, obsidian: `obsidian:${items.length}`, substack: 'substack' }),
+        recordPreferenceHistory: async (report) => {
+          events.push(`record:${report.selectedItems.length}`);
+          recordedReport = report;
+        },
+        publish: async () => {
+          events.push('publish');
+          throw new Error('publish failed');
+        },
+        log: () => {},
+      }),
+    /publish failed/,
+  );
+
+  assert.deepEqual(events, ['record:1', 'publish']);
+  assert.equal(recordedReport?.rankedItems[0]?.selectedByHuman, true);
+  assert.equal(recordedReport?.selectedItems.length, 1);
 });
 
 test('runGenerate writes curation diagnostics into review packets when curate returns diagnostics', async () => {

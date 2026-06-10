@@ -9,6 +9,12 @@ node_modules/
 # Output files
 output/
 
+# Local preference learning state
+data/preference-history.jsonl
+data/preference-profile.json
+data/preference-suggestions.json
+data/preference-rules.json
+
 # IDE
 .cursor/
 .idea/

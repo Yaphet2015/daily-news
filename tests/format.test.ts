@@ -110,3 +110,31 @@ test('format keeps self-thread items linked to the root X status', () => {
   assert.doesNotMatch(result.obsidian, /lessons\.md/);
   assert.doesNotMatch(result.substack, /lessons\.md/);
 });
+
+test("format renders roundup entries with the original external source attribution", () => {
+  const result = format(
+    [
+      {
+        id: 'ss-roundup-1',
+        title: 'Perplexity 推出 Labs 模式',
+        summary: 'Perplexity 推出了 Labs 模式。',
+        url: 'https://example.com/perplexity-labs',
+        originUrl: 'https://www.bensbites.com/p/ai-media-goes-mainstream',
+        author: "Ben's Bites",
+        attribution: 'Perplexity launched Labs',
+        source: 'substack',
+        category: 'Product',
+        media: [],
+      },
+    ] as never[],
+    '2026-05-27',
+  );
+
+  assert.match(result.obsidian, /来源：\[Perplexity launched Labs\]\(https:\/\/example\.com\/perplexity-labs\)/);
+  assert.match(
+    result.substack,
+    /<p>来源：<a href="https:\/\/example\.com\/perplexity-labs" target="_blank">Perplexity launched Labs<\/a><\/p>/,
+  );
+  assert.doesNotMatch(result.obsidian, /Ben's Bites/);
+  assert.doesNotMatch(result.substack, /Ben's Bites/);
+});

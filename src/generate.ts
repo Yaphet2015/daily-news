@@ -10,6 +10,7 @@ import {
 } from './envDiagnostics.js';
 import { format, formatDateFromUnixSeconds } from './format.js';
 import { publish } from './publish.js';
+import { readConfirmedPreferenceRules, recordPreferenceHistoryFromSelectionReport } from './preferences.js';
 import { rankItems, selectCandidatePool } from './rank.js';
 import { writeReviewPacket } from './review.js';
 import { select } from './select.js';
@@ -50,6 +51,7 @@ interface GenerateDeps {
   curate: (items: CollectedItem[]) => Promise<CuratedItem[] | CurateResult>;
   select: (items: CuratedItem[]) => Promise<CuratedItem[]>;
   format: typeof format;
+  recordPreferenceHistory: (report: SelectionReport) => Promise<void>;
   publish: (result: ReturnType<typeof format>, report?: SelectionReport) => Promise<void>;
   writeReviewPacket: (packet: ReviewPacket) => Promise<ReviewPacketPaths>;
   shouldLogEnvironmentDiagnostics: () => boolean;
@@ -77,11 +79,12 @@ function createGenerateDeps(): GenerateDeps {
       }),
     collect,
     attachReaderBriefs,
-    rankItems,
+    rankItems: (items) => rankItems(items, readConfirmedPreferenceRules()),
     selectCandidatePool,
     curate: curateWithDiagnostics,
     select,
     format,
+    recordPreferenceHistory: async () => {},
     publish,
     writeReviewPacket,
     shouldLogEnvironmentDiagnostics,
@@ -350,6 +353,7 @@ export async function runGenerate(
     curateResult.diagnostics,
   );
 
+  await deps.recordPreferenceHistory(report);
   await deps.publish(formatted, report);
   await deps.writeState(advancePublishedState(publishedState, snapshot.enabledSources, snapshot.collectedAt));
   await deps.clearDraft();
@@ -358,7 +362,16 @@ export async function runGenerate(
 }
 
 async function main(): Promise<void> {
-  await runGenerate({}, parseGenerateOptions(process.argv.slice(2)));
+  await runGenerate(
+    {
+      recordPreferenceHistory: async (report) => {
+        await recordPreferenceHistoryFromSelectionReport(report, {
+          reportPath: `output/${report.date}-selection-report.json`,
+        });
+      },
+    },
+    parseGenerateOptions(process.argv.slice(2)),
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
