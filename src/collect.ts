@@ -38,6 +38,7 @@ const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
 const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
 const DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS = 200;
 const FALLBACK_TWITTER_RECOMMENDATION_MAX_TWEETS = 20;
+const DEFAULT_TWITTER_ENRICHMENT_MAX_TRANSIENT_FAILURES = 3;
 const DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT = 'http://127.0.0.1:9222';
 const DEFAULT_TWITTER_RECOMMENDATION_FILTER_MODEL = 'gpt-4o-mini';
 
@@ -1838,6 +1839,48 @@ function isTransientCurlError(error: unknown): boolean {
   return /(?:exit code 2[89]|exit code 3[0-9]|SSL_ERROR|ECONNRESET|EPIPE)/i.test(msg);
 }
 
+interface TwitterEnrichmentCircuitBreaker {
+  shouldSkip(): boolean;
+  recordFailure(error: unknown): void;
+}
+
+interface CreateTwitterEnrichmentCircuitBreakerOptions {
+  maxTransientFailures?: number;
+}
+
+function isTwitterRateLimitError(error: unknown): boolean {
+  return /(?:HTTP 429|error 429|Rate limit exceeded|Too Many Requests)/i.test(summarizeError(error));
+}
+
+function isTwitterTransientEnrichmentError(error: unknown): boolean {
+  return /(?:HTTP 0|network error|curl:\s*\(28\)|timed out|timeout|TLS connect|SSL connection timeout|SSL_ERROR)/i.test(
+    summarizeError(error),
+  );
+}
+
+export function createTwitterEnrichmentCircuitBreaker({
+  maxTransientFailures = DEFAULT_TWITTER_ENRICHMENT_MAX_TRANSIENT_FAILURES,
+}: CreateTwitterEnrichmentCircuitBreakerOptions = {}): TwitterEnrichmentCircuitBreaker {
+  let rateLimited = false;
+  let transientFailures = 0;
+
+  return {
+    shouldSkip() {
+      return rateLimited || transientFailures >= maxTransientFailures;
+    },
+    recordFailure(error: unknown) {
+      if (isTwitterRateLimitError(error)) {
+        rateLimited = true;
+        return;
+      }
+
+      if (isTwitterTransientEnrichmentError(error)) {
+        transientFailures += 1;
+      }
+    },
+  };
+}
+
 function createShortUrlResolver(): (url: string, retries?: number) => Promise<string | null> {
   const cache = new Map<string, string | null>();
   return async (url: string, retries = 2): Promise<string | null> => {
@@ -1926,13 +1969,14 @@ async function findAuthorReplySource(
   item: CollectedItem,
   fetchReplies: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>,
   fetchPage: (url: string) => Promise<LinkedSource | null>,
+  existingReplies?: ReplyContext[],
 ): Promise<LinkedSource | null> {
   const authorUsername = item.author.username?.toLowerCase();
   if (!authorUsername) return null;
 
   let replies: ReplyContext[];
   try {
-    replies = await fetchReplies(item, 3);
+    replies = existingReplies ?? (await fetchReplies(item, 3));
   } catch {
     return null;
   }
@@ -2064,16 +2108,33 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
   };
 }
 
+export function createLinkedPageFetcher(
+  fetchPage: (url: string) => Promise<LinkedSource | null> = fetchLinkedPage,
+): (url: string) => Promise<LinkedSource | null> {
+  const cache = new Map<string, Promise<LinkedSource | null>>();
+  return async (url: string): Promise<LinkedSource | null> => {
+    const cacheKey = normalizeExternalUrl(url) ?? url;
+    const cached = cache.get(cacheKey);
+    if (cached) return cached;
+
+    const pending = fetchPage(url);
+    cache.set(cacheKey, pending);
+    return pending;
+  };
+}
+
 interface ResolveTwitterPrimarySourceOptions {
   fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
   fetchTwitterReplies?: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>;
   resolveShortUrl?: (url: string) => Promise<string | null>;
   fetchQuotedPrimarySource?: (url: string) => Promise<LinkedSource | null>;
+  enrichmentBreaker?: TwitterEnrichmentCircuitBreaker;
 }
 
 interface FetchTwitterRepliesOptions {
   fetchTwitterRepliesViaApi?: (tweetId: string, maxReplies: number) => Promise<ReplyContext[]>;
   fetchTwitterRepliesViaCli?: (tweetId: string, maxReplies: number) => Promise<ReplyContext[]>;
+  enrichmentBreaker?: TwitterEnrichmentCircuitBreaker;
 }
 
 export function parseTwitterCliReplyPayload(payload: TwitterCliReplyPayload): TwitterCliTweet[] {
@@ -2163,14 +2224,17 @@ async function fetchQuotedPrimarySource(
   url: string,
   fetchLinkedPageImpl: (url: string) => Promise<LinkedSource | null>,
   resolveShortUrlImpl: (url: string) => Promise<string | null>,
+  enrichmentBreaker?: TwitterEnrichmentCircuitBreaker,
 ): Promise<LinkedSource | null> {
   const tweetId = extractTweetIdFromStatusUrl(url);
   if (!tweetId) return null;
+  if (enrichmentBreaker?.shouldSkip()) return null;
 
   let quotedTweet: TwitterCliTweet | null;
   try {
     quotedTweet = await fetchTwitterTweetViaCli(tweetId);
   } catch (error) {
+    enrichmentBreaker?.recordFailure(error);
     console.warn(`[collect] 拉取 quoted tweet 失败 ${url}: ${summarizeError(error)}`);
     return null;
   }
@@ -2424,6 +2488,7 @@ export async function fetchTwitterReplies(
   options: FetchTwitterRepliesOptions = {},
 ): Promise<ReplyContext[]> {
   if (item.source !== 'twitter') return [];
+  if (options.enrichmentBreaker?.shouldSkip()) return [];
 
   const fetchTwitterRepliesViaApiImpl = options.fetchTwitterRepliesViaApi ?? fetchTwitterRepliesViaApi;
   const fetchTwitterRepliesViaCliImpl = options.fetchTwitterRepliesViaCli ?? fetchTwitterRepliesViaCli;
@@ -2432,6 +2497,11 @@ export async function fetchTwitterReplies(
     try {
       return await fetchTwitterRepliesViaApiImpl(item.id, maxReplies);
     } catch (error) {
+      options.enrichmentBreaker?.recordFailure(error);
+      if (options.enrichmentBreaker?.shouldSkip()) {
+        console.warn(`[collect] twitterapi replies 失败，跳过 replies: ${error}`);
+        return [];
+      }
       console.warn(`[collect] twitterapi replies 失败，回退到 twitter-cli: ${error}`);
     }
   }
@@ -2439,6 +2509,7 @@ export async function fetchTwitterReplies(
   try {
     return await fetchTwitterRepliesViaCliImpl(item.id, maxReplies);
   } catch (error) {
+    options.enrichmentBreaker?.recordFailure(error);
     console.warn(`[collect] twitter-cli replies 失败，跳过 replies: ${error}`);
     return [];
   }
@@ -2452,11 +2523,15 @@ export async function resolveTwitterPrimarySource(
   if (item.selfThread) return item;
 
   const fetchLinkedPageImpl = options.fetchLinkedPage ?? fetchLinkedPage;
-  const fetchTwitterRepliesImpl = options.fetchTwitterReplies ?? fetchTwitterReplies;
   const resolveShortUrlImpl = options.resolveShortUrl ?? resolveShortUrl;
+  const enrichmentBreaker = options.enrichmentBreaker;
+  const fetchTwitterRepliesImpl =
+    options.fetchTwitterReplies ??
+    ((replyItem: CollectedItem, maxReplies: number) =>
+      fetchTwitterReplies(replyItem, maxReplies, { enrichmentBreaker }));
   const fetchQuotedPrimarySourceImpl =
     options.fetchQuotedPrimarySource ??
-    ((url: string) => fetchQuotedPrimarySource(url, fetchLinkedPageImpl, resolveShortUrlImpl));
+    ((url: string) => fetchQuotedPrimarySource(url, fetchLinkedPageImpl, resolveShortUrlImpl, enrichmentBreaker));
   const enrichedCandidates = await enrichTwitterTextCandidates(item, resolveShortUrlImpl);
   const enrichedItem = {
     ...item,
@@ -2482,7 +2557,7 @@ export async function resolveTwitterPrimarySource(
     return useEmbeddedLinkedSource([]);
   }
 
-  if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl) {
+  if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl && !enrichmentBreaker?.shouldSkip()) {
     const quotedPrimarySource = await fetchQuotedPrimarySourceImpl(enrichedItem.quotedStatusUrl);
     if (quotedPrimarySource) {
       return {
@@ -2496,9 +2571,11 @@ export async function resolveTwitterPrimarySource(
     }
   }
 
+  const shouldFetchReplyContext =
+    tweetLinks.length === 0 && shouldFetchRepliesForPrimarySource(enrichedItem) && !enrichmentBreaker?.shouldSkip();
   const replyContext =
-    tweetLinks.length === 0 && shouldFetchRepliesForPrimarySource(enrichedItem)
-      ? await fetchTwitterRepliesImpl(enrichedItem, 1)
+    shouldFetchReplyContext
+      ? await fetchTwitterRepliesImpl(enrichedItem, 3)
       : [];
   const replyLinks = dedupeUrls(replyContext.flatMap((reply) => reply.outboundLinks));
   const candidateLinks = tweetLinks.length > 0 ? tweetLinks : replyLinks;
@@ -2509,11 +2586,14 @@ export async function resolveTwitterPrimarySource(
     }
 
     // Fallback: check if the author posted a reply with a link to the full article
-    const authorReplySource = await findAuthorReplySource(
-      enrichedItem,
-      fetchTwitterRepliesImpl,
-      fetchLinkedPageImpl,
-    );
+    const authorReplySource = enrichmentBreaker?.shouldSkip()
+      ? null
+      : await findAuthorReplySource(
+          enrichedItem,
+          fetchTwitterRepliesImpl,
+          fetchLinkedPageImpl,
+          shouldFetchReplyContext ? replyContext : undefined,
+        );
     if (authorReplySource) {
       return {
         ...enrichedItem,
@@ -2550,7 +2630,7 @@ export async function resolveTwitterPrimarySource(
 
   const resolved = resolveTwitterLinkedSource(item, linkedSources);
   if (!resolved.linkedSource) {
-    if (enrichedItem.quotedStatusUrl) {
+    if (enrichedItem.quotedStatusUrl && !enrichmentBreaker?.shouldSkip()) {
       const quotedPrimarySource = await fetchQuotedPrimarySourceImpl(enrichedItem.quotedStatusUrl);
       if (quotedPrimarySource) {
         return {
@@ -2566,23 +2646,6 @@ export async function resolveTwitterPrimarySource(
 
     if (enrichedItem.embeddedLinkedSource) {
       return useEmbeddedLinkedSource(replyContext);
-    }
-
-    // Fallback: check if the author posted a reply with a link to the full article
-    const authorReplySource = await findAuthorReplySource(
-      enrichedItem,
-      fetchTwitterRepliesImpl,
-      fetchLinkedPageImpl,
-    );
-    if (authorReplySource) {
-      return {
-        ...enrichedItem,
-        url: authorReplySource.url,
-        sourceLabel: resolveSourceLabel(authorReplySource),
-        linkedSource: authorReplySource,
-        replyContext,
-        sourceResolution: { decision: 'use_linked_source', reason: 'author_reply_source' },
-      };
     }
 
     return {
@@ -2671,10 +2734,14 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
   ];
   const collapsed = collapseNumberedSelfThreads(filtered);
   const sharedShortUrlResolver = createShortUrlResolver();
+  const sharedLinkedPageFetcher = createLinkedPageFetcher();
+  const twitterEnrichmentBreaker = createTwitterEnrichmentCircuitBreaker();
   const resolved = await resolveTwitterPrimarySources(collapsed, {
     resolveTwitterPrimarySource: (item) =>
       resolveTwitterPrimarySource(item, {
         resolveShortUrl: sharedShortUrlResolver,
+        fetchLinkedPage: sharedLinkedPageFetcher,
+        enrichmentBreaker: twitterEnrichmentBreaker,
       }),
   });
   console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);

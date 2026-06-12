@@ -963,6 +963,94 @@ test('fetchTwitterReplies falls back to empty reply context when twitter-cli rep
   assert.deepEqual(replies, []);
 });
 
+test('fetchTwitterReplies stops later lookups after a Twitter rate limit', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).createTwitterEnrichmentCircuitBreaker, 'function');
+  assert.equal(typeof (collectModule as Record<string, unknown>).fetchTwitterReplies, 'function');
+
+  const createTwitterEnrichmentCircuitBreaker = (collectModule as Record<string, Function>)
+    .createTwitterEnrichmentCircuitBreaker;
+  const fetchTwitterReplies = (collectModule as Record<string, Function>).fetchTwitterReplies;
+  const breaker = createTwitterEnrichmentCircuitBreaker();
+  const item = {
+    id: 'tw-rate-limited',
+    source: 'twitter',
+    text: 'root tweet',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-rate-limited',
+    originUrl: 'https://x.com/alice/status/tw-rate-limited',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: [],
+  };
+  let cliCalls = 0;
+
+  const first = await fetchTwitterReplies(item, 3, {
+    enrichmentBreaker: breaker,
+    fetchTwitterRepliesViaCli: async () => {
+      cliCalls += 1;
+      throw new Error('Twitter API error (HTTP 429): Twitter API error 429: Rate limit exceeded');
+    },
+  });
+  const second = await fetchTwitterReplies({ ...item, id: 'tw-after-rate-limit' }, 3, {
+    enrichmentBreaker: breaker,
+    fetchTwitterRepliesViaCli: async () => {
+      cliCalls += 1;
+      return [
+        {
+          id: 'reply-should-not-fetch',
+          text: 'reply',
+          author: { name: 'Alice', username: 'alice' },
+          publishedAt: '2026-03-15T09:01:00Z',
+          url: 'https://x.com/alice/status/reply-should-not-fetch',
+          outboundLinks: [],
+        },
+      ];
+    },
+  });
+
+  assert.deepEqual(first, []);
+  assert.deepEqual(second, []);
+  assert.equal(cliCalls, 1);
+});
+
+test('fetchTwitterReplies stops later lookups after repeated transient Twitter failures', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).createTwitterEnrichmentCircuitBreaker, 'function');
+  assert.equal(typeof (collectModule as Record<string, unknown>).fetchTwitterReplies, 'function');
+
+  const createTwitterEnrichmentCircuitBreaker = (collectModule as Record<string, Function>)
+    .createTwitterEnrichmentCircuitBreaker;
+  const fetchTwitterReplies = (collectModule as Record<string, Function>).fetchTwitterReplies;
+  const breaker = createTwitterEnrichmentCircuitBreaker({ maxTransientFailures: 2 });
+  const item = {
+    id: 'tw-timeout',
+    source: 'twitter',
+    text: 'root tweet',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-timeout',
+    originUrl: 'https://x.com/alice/status/tw-timeout',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: [],
+  };
+  let cliCalls = 0;
+  const timeoutOptions = {
+    enrichmentBreaker: breaker,
+    fetchTwitterRepliesViaCli: async () => {
+      cliCalls += 1;
+      throw new Error(
+        'Twitter API error (HTTP 0): Twitter API network error: Failed to perform, curl: (28) Connection timed out after 30002 milliseconds.',
+      );
+    },
+  };
+
+  await fetchTwitterReplies(item, 3, timeoutOptions);
+  await fetchTwitterReplies({ ...item, id: 'tw-timeout-2' }, 3, timeoutOptions);
+  const skipped = await fetchTwitterReplies({ ...item, id: 'tw-timeout-3' }, 3, timeoutOptions);
+
+  assert.deepEqual(skipped, []);
+  assert.equal(cliCalls, 2);
+});
+
 test('shouldFetchRepliesForPrimarySource only enables reply lookup for wrapper-like tweets without outbound links', () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).shouldFetchRepliesForPrimarySource, 'function');
 
@@ -1059,7 +1147,7 @@ test('resolveTwitterPrimarySource uses the latest reply link when wrapper tweets
     },
     {
       fetchTwitterReplies: async (_item: unknown, maxReplies: number) => {
-        assert.equal(maxReplies, 1);
+        assert.equal(maxReplies, 3);
         return [
           {
             id: 'reply-1',
@@ -1093,6 +1181,61 @@ test('resolveTwitterPrimarySource uses the latest reply link when wrapper tweets
       outboundLinks: ['https://docs.example.com/launch'],
     },
   ]);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'reply_wrapper' });
+});
+
+test('resolveTwitterPrimarySource reuses wrapper reply lookup for author reply fallback', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const replyLookupMaxValues: number[] = [];
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-single-reply-pass',
+      source: 'twitter',
+      text: 'Read more here',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-single-reply-pass',
+      originUrl: 'https://x.com/alice/status/tw-single-reply-pass',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      fetchTwitterReplies: async (_item: unknown, maxReplies: number) => {
+        replyLookupMaxValues.push(maxReplies);
+        return [
+          {
+            id: 'reply-1',
+            text: 'first reply without a link',
+            author: { name: 'Bob', username: 'bob' },
+            publishedAt: '2026-03-15T09:01:00Z',
+            url: 'https://x.com/bob/status/reply-1',
+            outboundLinks: [],
+          },
+          {
+            id: 'reply-2',
+            text: 'full post https://blog.example.com/deep-dive',
+            author: { name: 'Alice', username: 'alice' },
+            publishedAt: '2026-03-15T09:02:00Z',
+            url: 'https://x.com/alice/status/reply-2',
+            outboundLinks: ['https://blog.example.com/deep-dive'],
+          },
+        ].slice(0, maxReplies);
+      },
+      fetchLinkedPage: async (url: string) => ({
+        url,
+        title: 'Deep Dive',
+        description: 'A substantial article',
+        excerpt: 'A substantial article about the launch. '.repeat(20),
+        domain: 'blog.example.com',
+        via: 'reply',
+      }),
+    },
+  );
+
+  assert.deepEqual(replyLookupMaxValues, [3]);
+  assert.equal(resolved.url, 'https://blog.example.com/deep-dive');
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'reply_wrapper' });
 });
 
@@ -1183,6 +1326,45 @@ test('resolveTwitterPrimarySource prefers quoted X article sources over reply lo
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
 });
 
+test('resolveTwitterPrimarySource skips quoted tweet and reply lookups after enrichment breaker trips', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).createTwitterEnrichmentCircuitBreaker, 'function');
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const createTwitterEnrichmentCircuitBreaker = (collectModule as Record<string, Function>)
+    .createTwitterEnrichmentCircuitBreaker;
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const breaker = createTwitterEnrichmentCircuitBreaker();
+  breaker.recordFailure(new Error('Twitter API error (HTTP 429): Rate limit exceeded'));
+
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: 'tw-quote-skipped',
+      source: 'twitter',
+      text: 'Read more here',
+      publishedAt: '2026-03-15T09:00:00Z',
+      url: 'https://x.com/alice/status/tw-quote-skipped',
+      originUrl: 'https://x.com/alice/status/tw-quote-skipped',
+      author: { name: 'Alice', username: 'alice' },
+      media: [],
+      outboundLinks: [],
+      quotedStatusUrl: 'https://x.com/bob/status/quoted',
+    },
+    {
+      enrichmentBreaker: breaker,
+      fetchQuotedPrimarySource: async () => {
+        throw new Error('should not fetch quoted tweet');
+      },
+      fetchTwitterReplies: async () => {
+        throw new Error('should not fetch replies');
+      },
+    },
+  );
+
+  assert.equal(resolved.url, 'https://x.com/alice/status/tw-quote-skipped');
+  assert.deepEqual(resolved.replyContext, []);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
+});
+
 test('resolveTwitterPrimarySource skips short-link resolution when structured outbound links already exist', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
 
@@ -1265,6 +1447,43 @@ test('resolveTwitterPrimarySources processes items concurrently with bounded con
 
   assert.ok(maxInFlight >= 1 && maxInFlight <= 2, `expected maxInFlight between 1 and 2, got ${maxInFlight}`);
   assert.deepEqual(resolved.map((item: { id: string }) => item.id), ['tw-1', 'tw-2']);
+});
+
+test('createLinkedPageFetcher caches null results across repeated linked-page lookups', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).createLinkedPageFetcher, 'function');
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySources, 'function');
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const createLinkedPageFetcher = (collectModule as Record<string, Function>).createLinkedPageFetcher;
+  const resolveTwitterPrimarySources = (collectModule as Record<string, Function>).resolveTwitterPrimarySources;
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  let fetchCount = 0;
+  const fetchLinkedPage = createLinkedPageFetcher(async () => {
+    fetchCount += 1;
+    return null;
+  });
+
+  const items = ['tw-cache-1', 'tw-cache-2'].map((id) => ({
+    id,
+    source: 'twitter',
+    text: 'Read more here',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: `https://x.com/alice/status/${id}`,
+    originUrl: `https://x.com/alice/status/${id}`,
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: ['https://thariqs.github.io/cc-video-editing-deck'],
+  }));
+
+  const resolved = await resolveTwitterPrimarySources(items, {
+    resolveTwitterPrimarySource: (item: unknown) => resolveTwitterPrimarySource(item, { fetchLinkedPage }),
+  });
+
+  assert.equal(fetchCount, 1);
+  assert.deepEqual(
+    resolved.map((item: { sourceResolution: { reason: string } }) => item.sourceResolution.reason),
+    ['no_linked_source', 'no_linked_source'],
+  );
 });
 
 test('collapseNumberedSelfThreads merges numbered same-author threads into the root tweet and keeps X origin', () => {
@@ -1514,6 +1733,37 @@ test('resolveTwitterPrimarySource falls back to the origin tweet when all linked
     },
   });
 
+  assert.equal(resolved.url, item.originUrl);
+  assert.equal(resolved.linkedSource, undefined);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
+});
+
+test('resolveTwitterPrimarySource does not query replies when existing linked-page candidates fail', async () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
+
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const item = {
+    id: 'tw-link-fail-no-replies',
+    source: 'twitter',
+    text: 'Read more here',
+    publishedAt: '2026-03-15T09:00:00Z',
+    url: 'https://x.com/alice/status/tw-link-fail-no-replies',
+    originUrl: 'https://x.com/alice/status/tw-link-fail-no-replies',
+    author: { name: 'Alice', username: 'alice' },
+    media: [],
+    outboundLinks: ['https://docs.example.com/launch'],
+  };
+  let replyCalls = 0;
+
+  const resolved = await resolveTwitterPrimarySource(item, {
+    fetchLinkedPage: async () => null,
+    fetchTwitterReplies: async () => {
+      replyCalls += 1;
+      return [];
+    },
+  });
+
+  assert.equal(replyCalls, 0);
   assert.equal(resolved.url, item.originUrl);
   assert.equal(resolved.linkedSource, undefined);
   assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
