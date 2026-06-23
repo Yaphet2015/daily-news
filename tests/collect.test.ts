@@ -633,24 +633,34 @@ test('collectTwitterRecommendationItems skips recommendation feed when CDP has n
   assert.match(warnings[0], /跳过推荐流/);
 });
 
-test('collectTwitterRecommendationItems defaults to 200 recommendations to avoid oversized X pagination', async () => {
+test('collectTwitterRecommendationItems defaults to six small recommendation batches with random delays', async () => {
   const collectTwitterRecommendationItems = (collectModule as Record<string, Function>)
     .collectTwitterRecommendationItems;
   const commands: string[] = [];
+  const sleeps: number[] = [];
+  const topicGateIds: string[][] = [];
 
   const result = await collectTwitterRecommendationItems(0, {
     fetchRecommendationAuth: async () => ({ authToken: 'recommend-auth', ct0: 'recommend-ct0' }),
     execTwitterCliCommand: async (command: string) => {
       commands.push(command);
+      const batch = commands.length;
       return {
         stderr: '',
         stdout: JSON.stringify({
           ok: true,
           data: [
             {
-              id: 'recommend-1',
-              text: 'An AI infrastructure launch.',
-              author: { id: 'user-1', name: 'Alice', screenName: 'alice' },
+              id: `recommend-${batch}`,
+              text: `AI infrastructure launch batch ${batch}.`,
+              author: { id: `user-${batch}`, name: 'Alice', screenName: 'alice' },
+              createdAt: '2026-03-15T09:00:00Z',
+              media: [],
+            },
+            {
+              id: 'shared-recommendation',
+              text: 'Duplicate AI recommendation.',
+              author: { id: 'shared-user', name: 'Bob', screenName: 'bob' },
               createdAt: '2026-03-15T09:00:00Z',
               media: [],
             },
@@ -658,15 +668,46 @@ test('collectTwitterRecommendationItems defaults to 200 recommendations to avoid
         }),
       };
     },
-    topicGate: async (items: Array<{ id: string }>) => new Set(items.map((item) => item.id)),
+    topicGate: async (items: Array<{ id: string }>) => {
+      topicGateIds.push(items.map((item) => item.id));
+      return new Set(items.map((item) => item.id));
+    },
+    random: () => 0.5,
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+    },
   });
 
-  assert.equal(commands.length, 1);
-  assert.match(commands[0] ?? '', /twitter feed --type for-you --max 200 --json/);
-  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['recommend-1']);
+  assert.equal(commands.length, 6);
+  assert.deepEqual(
+    commands.map((command) => command.match(/twitter feed --type for-you --max \d+ --json/)?.[0]),
+    Array.from({ length: 6 }, () => 'twitter feed --type for-you --max 50 --json'),
+  );
+  assert.equal(sleeps.length, 5);
+  assert.ok(sleeps.every((ms) => ms >= 8000 && ms <= 20000));
+  assert.deepEqual(topicGateIds, [
+    [
+      'recommend-1',
+      'shared-recommendation',
+      'recommend-2',
+      'recommend-3',
+      'recommend-4',
+      'recommend-5',
+      'recommend-6',
+    ],
+  ]);
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), [
+    'recommend-1',
+    'shared-recommendation',
+    'recommend-2',
+    'recommend-3',
+    'recommend-4',
+    'recommend-5',
+    'recommend-6',
+  ]);
 });
 
-test('collectTwitterRecommendationItems retries with a single page when twitter-cli pagination fails', async () => {
+test('collectTwitterRecommendationItems falls back to a smaller batch when twitter-cli pagination fails', async () => {
   const collectTwitterRecommendationItems = (collectModule as Record<string, Function>)
     .collectTwitterRecommendationItems;
   const commands: string[] = [];
@@ -681,11 +722,12 @@ test('collectTwitterRecommendationItems retries with a single page when twitter-
   });
 
   const result = await collectTwitterRecommendationItems(0, {
-    maxTweets: 500,
+    batchSize: 50,
+    batchCount: 1,
     fetchRecommendationAuth: async () => ({ authToken: 'recommend-auth', ct0: 'recommend-ct0' }),
     execTwitterCliCommand: async (command: string) => {
       commands.push(command);
-      if (command.includes('--max 500')) throw paginationError;
+      if (command.includes('--max 50')) throw paginationError;
       assert.match(command, /--max 20\b/);
       return {
         stderr: '',
@@ -707,7 +749,7 @@ test('collectTwitterRecommendationItems retries with a single page when twitter-
     warn: (message: string) => warnings.push(message),
   });
 
-  assert.deepEqual(commands.map((command) => command.match(/--max \d+/)?.[0]), ['--max 500', '--max 20']);
+  assert.deepEqual(commands.map((command) => command.match(/--max \d+/)?.[0]), ['--max 50', '--max 20']);
   assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['recommend-1']);
   assert.match(result.warnings?.[0] ?? '', /改用最近 20 条/);
   assert.match(warnings[0] ?? '', /改用最近 20 条/);

@@ -36,7 +36,10 @@ const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
 const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
-const DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS = 200;
+const DEFAULT_TWITTER_RECOMMENDATION_BATCH_SIZE = 50;
+const DEFAULT_TWITTER_RECOMMENDATION_BATCH_COUNT = 6;
+const DEFAULT_TWITTER_RECOMMENDATION_BATCH_MIN_DELAY_MS = 8000;
+const DEFAULT_TWITTER_RECOMMENDATION_BATCH_MAX_DELAY_MS = 20000;
 const FALLBACK_TWITTER_RECOMMENDATION_MAX_TWEETS = 20;
 const DEFAULT_TWITTER_ENRICHMENT_MAX_TRANSIENT_FAILURES = 3;
 const DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT = 'http://127.0.0.1:9222';
@@ -240,10 +243,15 @@ interface FetchTwitterRecommendationAuthFromCdpOptions {
 }
 
 interface CollectTwitterRecommendationItemsOptions {
-  maxTweets?: number;
+  batchSize?: number;
+  batchCount?: number;
+  minBatchDelayMs?: number;
+  maxBatchDelayMs?: number;
   fetchRecommendationAuth?: () => Promise<TwitterRecommendationAuth | null>;
   chooseRecommendationLoginRetry?: () => Promise<boolean>;
   execTwitterCliCommand?: typeof execTwitterCliCommand;
+  random?: () => number;
+  sleep?: (ms: number) => Promise<void>;
   topicGate?: RecommendationTopicGate;
   warn?: (message: string) => void;
 }
@@ -1331,6 +1339,21 @@ function isTwitterCliQueryUnspecifiedError(message: string): boolean {
   return /Twitter API returned errors:\s*Query:\s*Unspecified/i.test(message);
 }
 
+function isTwitterCliRecommendationFallbackError(message: string): boolean {
+  return isTwitterCliQueryUnspecifiedError(message) || /Twitter API returned errors:\s*Timeout:\s*Unspecified/i.test(message);
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomDelayMs(minMs: number, maxMs: number, random: () => number): number {
+  const min = Math.max(0, Math.floor(minMs));
+  const max = Math.max(min, Math.floor(maxMs));
+  if (max === min) return min;
+  return min + Math.floor(random() * (max - min + 1));
+}
+
 async function execTwitterCliCommand(command: string, maxBuffer: number): Promise<{ stdout: string; stderr: string }> {
   try {
     return await execAsync(command, { maxBuffer });
@@ -2340,13 +2363,18 @@ async function collectViaCli(listId: string, maxTweets: number): Promise<Collect
 export async function collectTwitterRecommendationItems(
   sinceTime: number,
   {
-    maxTweets = DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS,
+    batchSize = DEFAULT_TWITTER_RECOMMENDATION_BATCH_SIZE,
+    batchCount = DEFAULT_TWITTER_RECOMMENDATION_BATCH_COUNT,
+    minBatchDelayMs = DEFAULT_TWITTER_RECOMMENDATION_BATCH_MIN_DELAY_MS,
+    maxBatchDelayMs = DEFAULT_TWITTER_RECOMMENDATION_BATCH_MAX_DELAY_MS,
     fetchRecommendationAuth = () =>
       fetchTwitterRecommendationAuthFromCdp({
         endpoint: process.env.TWITTER_RECOMMENDATION_CDP_ENDPOINT ?? DEFAULT_TWITTER_RECOMMENDATION_CDP_ENDPOINT,
       }),
     chooseRecommendationLoginRetry: chooseLoginRetry = chooseRecommendationLoginRetry,
     execTwitterCliCommand: runTwitterCliCommand = execTwitterCliCommand,
+    random = Math.random,
+    sleep = defaultSleep,
     topicGate,
     warn = console.warn,
   }: CollectTwitterRecommendationItemsOptions = {},
@@ -2366,66 +2394,86 @@ export async function collectTwitterRecommendationItems(
   }
 
   const proxy = resolveHttpProxy();
-  const command = buildTwitterFeedCommand('for-you', maxTweets, proxy, auth);
-  logCollectDiagnostic(`twitter recommendation command=${redactCollectDiagnosticCommand(command)}`);
+  const itemsById = new Map<string, CollectedItem>();
 
-  let stdout: string;
-  let stderr: string;
-  try {
-    const result = await runTwitterCliCommand(command, 50 * 1024 * 1024);
-    stdout = result.stdout;
-    stderr = result.stderr;
-  } catch (error) {
-    const summary = summarizeTwitterCliError(error);
-    const fallbackMaxTweets = Math.min(FALLBACK_TWITTER_RECOMMENDATION_MAX_TWEETS, maxTweets);
-    if (fallbackMaxTweets < maxTweets && isTwitterCliQueryUnspecifiedError(summary)) {
-      const fallbackWarning = `推荐流采集触发 X 分页错误，已改用最近 ${fallbackMaxTweets} 条: ${summary}`;
-      warnings.push(fallbackWarning);
-      warn(`[collect] ${fallbackWarning}`);
+  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+    const batchNumber = batchIndex + 1;
+    const command = buildTwitterFeedCommand('for-you', batchSize, proxy, auth);
+    logCollectDiagnostic(
+      `twitter recommendation batch=${batchNumber}/${batchCount} command=${redactCollectDiagnosticCommand(command)}`,
+    );
 
-      const fallbackCommand = buildTwitterFeedCommand('for-you', fallbackMaxTweets, proxy, auth);
-      logCollectDiagnostic(`twitter recommendation fallback command=${redactCollectDiagnosticCommand(fallbackCommand)}`);
-      try {
-        const result = await runTwitterCliCommand(fallbackCommand, 50 * 1024 * 1024);
-        stdout = result.stdout;
-        stderr = result.stderr;
-      } catch (fallbackError) {
-        const warning = `推荐流采集失败，已跳过: ${summarizeTwitterCliError(fallbackError)}`;
+    let stdout: string;
+    let stderr: string;
+    try {
+      const result = await runTwitterCliCommand(command, 50 * 1024 * 1024);
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (error) {
+      const summary = summarizeTwitterCliError(error);
+      const fallbackMaxTweets = Math.min(FALLBACK_TWITTER_RECOMMENDATION_MAX_TWEETS, batchSize);
+      if (fallbackMaxTweets < batchSize && isTwitterCliRecommendationFallbackError(summary)) {
+        const fallbackWarning = `推荐流第 ${batchNumber}/${batchCount} 批采集触发 X 分页或超时错误，已改用最近 ${fallbackMaxTweets} 条: ${summary}`;
+        warnings.push(fallbackWarning);
+        warn(`[collect] ${fallbackWarning}`);
+
+        const fallbackCommand = buildTwitterFeedCommand('for-you', fallbackMaxTweets, proxy, auth);
+        logCollectDiagnostic(
+          `twitter recommendation fallback batch=${batchNumber}/${batchCount} command=${redactCollectDiagnosticCommand(fallbackCommand)}`,
+        );
+        try {
+          const result = await runTwitterCliCommand(fallbackCommand, 50 * 1024 * 1024);
+          stdout = result.stdout;
+          stderr = result.stderr;
+        } catch (fallbackError) {
+          const warning = `推荐流第 ${batchNumber}/${batchCount} 批采集失败，停止后续批次: ${summarizeTwitterCliError(fallbackError)}`;
+          warnings.push(warning);
+          warn(`[collect] ${warning}`);
+          break;
+        }
+      } else {
+        const warning = `推荐流第 ${batchNumber}/${batchCount} 批采集失败，停止后续批次: ${summary}`;
         warnings.push(warning);
         warn(`[collect] ${warning}`);
-        return { items: [], warnings };
+        break;
       }
-    } else {
-      const warning = `推荐流采集失败，已跳过: ${summary}`;
+    }
+
+    if (stderr && !stderr.includes('Getting Twitter cookies')) {
+      console.warn(`[collect] twitter-feed stderr: ${stderr}`);
+    }
+
+    let result: TwitterCliOutput;
+    try {
+      result = JSON.parse(stdout) as TwitterCliOutput;
+    } catch (error) {
+      const warning = `推荐流第 ${batchNumber}/${batchCount} 批采集失败，停止后续批次: ${summarizeError(error)}`;
       warnings.push(warning);
       warn(`[collect] ${warning}`);
-      return { items: [], warnings };
+      break;
+    }
+
+    if (!result.ok) {
+      const warning = `推荐流第 ${batchNumber}/${batchCount} 批采集失败，停止后续批次: twitter-cli returned ok=false`;
+      warnings.push(warning);
+      warn(`[collect] ${warning}`);
+      break;
+    }
+
+    const batchItems = filterSinceTime(result.data.map(mapTwitterCliTweet), sinceTime)
+      .map((item) => ({ ...item, twitterFeed: 'for-you' as const }));
+    for (const item of batchItems) {
+      if (!itemsById.has(item.id)) {
+        itemsById.set(item.id, item);
+      }
+    }
+
+    if (batchIndex < batchCount - 1) {
+      await sleep(randomDelayMs(minBatchDelayMs, maxBatchDelayMs, random));
     }
   }
 
-  if (stderr && !stderr.includes('Getting Twitter cookies')) {
-    console.warn(`[collect] twitter-feed stderr: ${stderr}`);
-  }
-
-  let result: TwitterCliOutput;
-  try {
-    result = JSON.parse(stdout) as TwitterCliOutput;
-  } catch (error) {
-    const warning = `推荐流采集失败，已跳过: ${summarizeError(error)}`;
-    warnings.push(warning);
-    warn(`[collect] ${warning}`);
-    return { items: [], warnings };
-  }
-
-  if (!result.ok) {
-    const warning = '推荐流采集失败，已跳过: twitter-cli returned ok=false';
-    warnings.push(warning);
-    warn(`[collect] ${warning}`);
-    return { items: [], warnings };
-  }
-
-  const items = filterSinceTime(result.data.map(mapTwitterCliTweet), sinceTime)
-    .map((item) => ({ ...item, twitterFeed: 'for-you' as const }));
+  const items = Array.from(itemsById.values());
   const filtered = await filterAiRelatedRecommendationItems(items, topicGate, warn);
   return {
     items: filtered.items,
@@ -2722,9 +2770,21 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
 
   const recommendationResult = shouldCollectTwitterRecommendations()
     ? await collectTwitterRecommendationItems(sinceTime, {
-        maxTweets: parsePositiveInt(
-          process.env.TWITTER_RECOMMENDATION_MAX_TWEETS,
-          DEFAULT_TWITTER_RECOMMENDATION_MAX_TWEETS,
+        batchSize: parsePositiveInt(
+          process.env.TWITTER_RECOMMENDATION_BATCH_SIZE,
+          DEFAULT_TWITTER_RECOMMENDATION_BATCH_SIZE,
+        ),
+        batchCount: parsePositiveInt(
+          process.env.TWITTER_RECOMMENDATION_BATCH_COUNT,
+          DEFAULT_TWITTER_RECOMMENDATION_BATCH_COUNT,
+        ),
+        minBatchDelayMs: parsePositiveInt(
+          process.env.TWITTER_RECOMMENDATION_BATCH_MIN_DELAY_MS,
+          DEFAULT_TWITTER_RECOMMENDATION_BATCH_MIN_DELAY_MS,
+        ),
+        maxBatchDelayMs: parsePositiveInt(
+          process.env.TWITTER_RECOMMENDATION_BATCH_MAX_DELAY_MS,
+          DEFAULT_TWITTER_RECOMMENDATION_BATCH_MAX_DELAY_MS,
         ),
       })
     : { items: [], warnings: [] };
