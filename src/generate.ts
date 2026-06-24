@@ -9,6 +9,7 @@ import {
   shouldLogEnvironmentDiagnostics,
 } from './envDiagnostics.js';
 import { format, formatDateFromUnixSeconds } from './format.js';
+import { applyProxyFromEnv } from './proxy.js';
 import { publish } from './publish.js';
 import { readConfirmedPreferenceRules, recordPreferenceHistoryFromSelectionReport } from './preferences.js';
 import { rankItems, selectCandidatePool } from './rank.js';
@@ -362,6 +363,8 @@ export async function runGenerate(
 }
 
 async function main(): Promise<void> {
+  applyProxyFromEnv();
+
   await runGenerate(
     {
       recordPreferenceHistory: async (report) => {

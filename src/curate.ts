@@ -19,8 +19,8 @@ import type {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT_PATH = join(__dirname, '..', 'prompts', 'curator.md');
-const DEFAULT_READER_MODEL = 'gpt-4o-mini';
-const FORCED_ROUNDUP_MODEL = 'gpt-4o-mini';
+const DEFAULT_READER_MODEL = 'deepseek-v4-flash';
+const FORCED_ROUNDUP_MODEL = 'deepseek-v4-flash';
 const REJECTION_SAMPLE_LIMIT = 10;
 const TRACKING_QUERY_PARAMS = new Set(['ref', 'ref_code', 'gclid', 'fbclid', 'mc_cid', 'mc_eid']);
 

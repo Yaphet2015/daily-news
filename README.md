@@ -88,7 +88,7 @@ npm run generate:review:diagnose
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `HTTP_PROXY` | 否 | 项目级代理入口；采集时会同时转发给 Substack 抓取和 `twitter-cli`（内部会映射为 `TWITTER_PROXY` + `HTTP_PROXY` + `HTTPS_PROXY`），为空时使用系统代理 |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 否 | 项目级代理入口；采集时会同时转发给 Substack 抓取和 `twitter-cli`（内部会映射为 `TWITTER_PROXY` + `HTTP_PROXY` + `HTTPS_PROXY`）。此外进程内的 `fetch`（DeepSeek / OpenAI 等 AI 调用）也会遵循这些变量（Node 20 内置 `fetch` 默认忽略代理，已通过 undici 全局 dispatcher 显式启用）；大小写均可，未设置时直连 |
 | `TWITTERAPI_KEY` | 否 | twitterapi.io API Key，作为 `twitter-cli` 失败后的回退数据源 |
 | `TWITTER_LIST_ID` | 否 | 要采集的 Twitter 列表 ID，默认已填入 AI/Tech 列表 |
 | `ENABLE_TWITTER_RECOMMENDATIONS` | 否 | 是否额外采集 X For You 推荐流，默认启用；设为 `false` / `0` / `no` 可关闭 |
