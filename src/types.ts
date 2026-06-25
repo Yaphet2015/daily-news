@@ -147,7 +147,11 @@ export interface CuratedItem {
 }
 
 export type CurationRejectionReason = 'unknown_id' | 'url_mismatch' | 'duplicate_id' | 'duplicate_url';
-export type CurationUrlCorrectionReason = 'origin_url' | 'tracking_params';
+export type CurationUrlCorrectionReason =
+  | 'origin_url'
+  | 'tracking_params'
+  | 'recovered_primary_url'
+  | 'recovered_origin_url';
 
 export interface CurationRejectionSample {
   reason: CurationRejectionReason;

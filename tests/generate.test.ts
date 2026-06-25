@@ -205,6 +205,63 @@ test('runGenerate writes curation diagnostics into the selection report when cur
   assert.deepEqual((publishedReport as { curationDiagnostics?: CurationDiagnostics }).curationDiagnostics, diagnostics);
 });
 
+test('runGenerate logs curation diagnostics when curate returns zero items', async () => {
+  const logs: string[] = [];
+  const diagnostics = createCurationDiagnostics({
+    outputCount: 0,
+    rejectedCount: 2,
+    rejectionCounts: {
+      unknown_id: 2,
+      url_mismatch: 0,
+      duplicate_id: 0,
+      duplicate_url: 0,
+    },
+    rejectionSamples: [
+      {
+        reason: 'unknown_id',
+        id: '1',
+        title: 'Ordinal ID',
+        modelUrl: 'https://example.com/story',
+      },
+    ],
+    urlCorrections: [],
+  });
+
+  await runGenerate({
+    readDraft: async () => null,
+    collect: async () => createSnapshot(),
+    writeDraft: async () => {},
+    clearDraft: async () => {},
+    readState: async () => ({
+      sources: {
+        twitter: { lastPublishedTime: 100 },
+        substack: { lastPublishedTime: 0 },
+      },
+    }),
+    writeState: async () => {},
+    attachReaderBriefs: async (items) => items,
+    rankItems: (items) => items as never,
+    selectCandidatePool: (items) => items as never,
+    curate: async () => ({
+      items: [],
+      diagnostics,
+    }),
+    select: async (items) => items,
+    format: (items, date) => ({ date, obsidian: `obsidian:${items.length}`, substack: 'substack' }),
+    publish: async () => {
+      throw new Error('publish should not run');
+    },
+    log: (message) => {
+      logs.push(message);
+    },
+  });
+
+  assert.match(logs.join('\n'), /curation diagnostics/);
+  assert.match(logs.join('\n'), /unknown_id=2/);
+  assert.match(logs.join('\n'), /Ordinal ID/);
+  assert.match(logs.join('\n'), /AI 未整理出任何资讯/);
+});
+
 test('runGenerate writes collection warnings into the selection report', async () => {
   let publishedReport: unknown;
 

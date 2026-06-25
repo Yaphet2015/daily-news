@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
 import { select as promptSelect } from '@inquirer/prompts';
 import { collect, diagnoseCollectEnvironment } from './collect.js';
-import { attachReaderBriefs, curateWithDiagnostics } from './curate.js';
+import { attachReaderBriefs, curateWithDiagnostics, formatCurationDiagnosticsSummary } from './curate.js';
 import { clearPendingDraft, readPendingDraft, writePendingDraft } from './draft.js';
 import {
   logEnvironmentDiagnostics,
@@ -329,6 +329,9 @@ export async function runGenerate(
   const curateResult = normalizeCurateResult(await deps.curate(curatedInputItems));
   const curatedItems = curateResult.items;
   if (curatedItems.length === 0) {
+    if (curateResult.diagnostics) {
+      deps.log(`[generate] curation diagnostics: ${formatCurationDiagnosticsSummary(curateResult.diagnostics)}`);
+    }
     deps.log('AI 未整理出任何资讯，本次运行结束。');
     return;
   }

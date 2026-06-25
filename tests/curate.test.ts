@@ -988,6 +988,176 @@ test('enrichCuratedItemsWithDiagnostics accepts primary urls that only differ by
   ]);
 });
 
+test('enrichCuratedItemsWithDiagnostics recovers ordinal model ids from exact primary urls', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: '1',
+        title: 'Recovered item',
+        summary: 'Recovered summary',
+        url: 'https://example.com/recovered',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'tw-recovered',
+        source: 'twitter',
+        text: 'Recovered source text',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/recovered',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string; url: string }) => [item.id, item.url]), [
+    ['tw-recovered', 'https://example.com/recovered'],
+  ]);
+  assert.equal(result.diagnostics.inputCount, 1);
+  assert.equal(result.diagnostics.rejectedCount, 0);
+  assert.deepEqual(result.diagnostics.urlCorrections, [
+    {
+      id: 'tw-recovered',
+      fromUrl: 'https://example.com/recovered',
+      toUrl: 'https://example.com/recovered',
+      reason: 'recovered_primary_url',
+    },
+  ]);
+});
+
+test('enrichCuratedItemsWithDiagnostics recovers ordinal model ids from exact origin urls', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: '2',
+        title: 'Recovered origin item',
+        summary: 'Recovered origin summary',
+        url: 'https://x.com/alice/status/2',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'tw-origin-recovered',
+        source: 'twitter',
+        text: 'Recovered source text',
+        originUrl: 'https://x.com/alice/status/2',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/origin-recovered',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string; url: string }) => [item.id, item.url]), [
+    ['tw-origin-recovered', 'https://example.com/origin-recovered'],
+  ]);
+  assert.equal(result.diagnostics.rejectedCount, 0);
+  assert.deepEqual(result.diagnostics.urlCorrections, [
+    {
+      id: 'tw-origin-recovered',
+      fromUrl: 'https://x.com/alice/status/2',
+      toUrl: 'https://example.com/origin-recovered',
+      reason: 'recovered_origin_url',
+    },
+  ]);
+});
+
+test('enrichCuratedItemsWithDiagnostics rejects ordinal ids when the recovery url is ambiguous', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: '1',
+        title: 'Ambiguous item',
+        summary: 'Ambiguous summary',
+        url: 'https://example.com/shared',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'tw-shared-1',
+        source: 'twitter',
+        text: 'Shared one',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/shared',
+        media: [],
+      },
+      {
+        id: 'tw-shared-2',
+        source: 'twitter',
+        text: 'Shared two',
+        author: { name: 'Bob', username: 'bob' },
+        publishedAt: '2026-05-19T00:01:00Z',
+        url: 'https://example.com/shared',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items, []);
+  assert.equal(result.diagnostics.rejectedCount, 1);
+  assert.equal(result.diagnostics.rejectionCounts.unknown_id, 1);
+  assert.deepEqual(result.diagnostics.rejectionSamples, [
+    {
+      reason: 'unknown_id',
+      id: '1',
+      title: 'Ambiguous item',
+      modelUrl: 'https://example.com/shared',
+    },
+  ]);
+});
+
+test('enrichCuratedItemsWithDiagnostics dedupes items recovered to the same candidate id', () => {
+  const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
+  const result = enrichCuratedItemsWithDiagnostics(
+    [
+      {
+        id: '1',
+        title: 'Recovered item',
+        summary: 'Recovered summary',
+        url: 'https://example.com/recovered',
+        author: 'ignored',
+        category: 'Product',
+      },
+      {
+        id: '2',
+        title: 'Recovered duplicate item',
+        summary: 'Recovered duplicate summary',
+        url: 'https://example.com/recovered',
+        author: 'ignored',
+        category: 'Product',
+      },
+    ],
+    [
+      {
+        id: 'tw-recovered',
+        source: 'twitter',
+        text: 'Recovered source text',
+        author: { name: 'Alice', username: 'alice' },
+        publishedAt: '2026-05-19T00:00:00Z',
+        url: 'https://example.com/recovered',
+        media: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), ['tw-recovered']);
+  assert.equal(result.diagnostics.rejectedCount, 1);
+  assert.equal(result.diagnostics.rejectionCounts.unknown_id, 1);
+  assert.equal(result.diagnostics.urlCorrections.length, 1);
+});
+
 test('enrichCuratedItemsWithDiagnostics rejects unrelated urls and records url_mismatch samples', () => {
   const enrichCuratedItemsWithDiagnostics = (curateModule as Record<string, Function>).enrichCuratedItemsWithDiagnostics;
   const result = enrichCuratedItemsWithDiagnostics(
