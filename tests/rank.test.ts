@@ -369,6 +369,48 @@ test('rankItems stops marking long-form Substack posts as low quality when a rea
   assert.ok((improved?.priorityScore ?? 0) > (baseline?.priorityScore ?? 0));
 });
 
+test('rankItems demotes teaser-only Substack posts without treating them as full articles', () => {
+  const fullPost = makeTwitterItem({
+    id: 'full-substack',
+    source: 'substack',
+    url: 'https://pub.substack.com/p/full',
+    author: { name: 'Pub' },
+    publication: { name: 'Pub', handle: 'pub', url: 'https://pub.substack.com' },
+    title: 'Full technical writeup',
+    text: 'Detailed model release analysis with benchmark data, migration guide, API docs, pricing notes, and examples https://example.com/full',
+    body: 'Detailed model release analysis with benchmark data, migration guide, API docs, pricing notes, and examples.',
+    readerBrief: {
+      summary: 'A full technical writeup.',
+      keyPoints: ['Benchmark data', 'Migration guide'],
+      claims: ['The release changes deployment tradeoffs'],
+      whyItMatters: 'It affects production AI workflows.',
+      signals: ['Concrete docs', 'Pricing details'],
+      caveats: [],
+    },
+  });
+  const teaser = makeTwitterItem({
+    id: 'teaser-substack',
+    source: 'substack',
+    url: 'https://www.lennysnewsletter.com/p/community-wisdom-beating-a-career',
+    author: { name: "Lenny's Newsletter" },
+    publication: { name: "Lenny's Newsletter", handle: 'lenny', url: 'https://www.lennysnewsletter.com' },
+    title: 'Community Wisdom',
+    text: 'Community Wisdom 191',
+    body:
+      'Hello and welcome to this week’s edition of Community Wisdom, a subscriber-only email, highlighting conversations in our members-only Slack community. Read more',
+    substackTeaserOnly: true,
+  });
+
+  const ranked = rankItems([teaser, fullPost]);
+  const rankedTeaser = ranked.find((item) => item.id === 'teaser-substack');
+  const rankedFullPost = ranked.find((item) => item.id === 'full-substack');
+
+  assert.ok(rankedTeaser);
+  assert.ok(rankedFullPost);
+  assert.match(rankedTeaser?.decisionReasons.join(' ') ?? '', /订阅墙\/预览内容/);
+  assert.ok((rankedFullPost?.priorityScore ?? 0) > (rankedTeaser?.priorityScore ?? 0));
+});
+
 test('rankItems applies confirmed local preference rules as explainable adjustments', () => {
   const ranked = rankItems(
     [

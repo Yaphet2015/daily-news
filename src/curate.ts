@@ -152,6 +152,31 @@ function normalizeOptionalStringArray(value: unknown): string[] | null {
   return validateStringArray(value);
 }
 
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+const SUBSTACK_TEASER_BODY_MAX_CHARS = 600;
+const SUBSTACK_TEASER_PATTERNS = [
+  /\bread more\b/i,
+  /\bsubscriber-only\b/i,
+  /\bmembers-only\b/i,
+  /\bpaid subscribers?\b/i,
+  /\bsubscribe to (?:continue|read)\b/i,
+  /\bupgrade to paid\b/i,
+  /\bsign in to read\b/i,
+  /\bcontinue reading\b/i,
+];
+
+function isSubstackTeaserOnly(item: CollectedItem): boolean {
+  if (item.source !== 'substack' || item.kind === 'substack_roundup_entry') return false;
+
+  const body = normalizeWhitespace([item.body, item.text].filter(Boolean).join(' '));
+  return body.length > 0 &&
+    body.length <= SUBSTACK_TEASER_BODY_MAX_CHARS &&
+    SUBSTACK_TEASER_PATTERNS.some((pattern) => pattern.test(body));
+}
+
 function formatMediaForPrompt(media: MediaAsset[]): string {
   if (media.length === 0) return 'Media: none';
 
@@ -323,7 +348,7 @@ function formatReaderBrief(brief: ReaderBrief): string {
     `Reader Summary: ${brief.summary}`,
     formatList('Key Points', brief.keyPoints),
     formatList('Claims', brief.claims),
-    `Why It Matters: ${brief.whyItMatters}`,
+    `Why It Matters: ${brief.whyItMatters || 'none'}`,
     formatList('Signals', brief.signals),
     formatList('Caveats', brief.caveats),
   ].join('\n');
@@ -447,6 +472,25 @@ function parseStructuredJson<T>(response: LlmJsonResponse): T {
   }
 }
 
+function getCurateItemSchemaError(item: unknown): string | null {
+  if (!item || typeof item !== 'object') return 'AI 响应包含非对象条目';
+
+  const candidate = item as Record<string, unknown>;
+  if (typeof candidate.id !== 'string' || candidate.id.length === 0) return 'AI 响应包含无效 id';
+  if (typeof candidate.title !== 'string' || candidate.title.length === 0) return 'AI 响应包含无效标题';
+  if (typeof candidate.summary !== 'string' || candidate.summary.length === 0) return 'AI 响应包含无效摘要';
+  if (typeof candidate.url !== 'string' || candidate.url.length === 0) return 'AI 响应包含无效 URL';
+  if (typeof candidate.author !== 'string' || candidate.author.length === 0) return 'AI 响应包含无效作者';
+  if (!VALID_CATEGORIES.includes(candidate.category as NewsCategory)) {
+    return `AI 响应包含无效分类: ${String(candidate.category)}`;
+  }
+  if (typeof candidate.editorialReason !== 'string' || candidate.editorialReason.length === 0) {
+    return 'AI 响应包含无效 editorialReason';
+  }
+
+  return null;
+}
+
 function validateCurateItems(items: unknown, response: LlmJsonResponse | null): LlmCuratedItem[] {
   if (!Array.isArray(items)) {
     if (response) throw new LlmJsonError('invalid_schema', response, 'AI 响应缺少顶层 items 数组');
@@ -454,25 +498,32 @@ function validateCurateItems(items: unknown, response: LlmJsonResponse | null): 
   }
 
   return items.map((item) => {
-    if (!item || typeof item !== 'object') {
-      if (response) throw new LlmJsonError('invalid_schema', response, 'AI 响应包含非对象条目');
-      throw new Error('AI 响应包含非对象条目');
-    }
-
-    const candidate = item as LlmCuratedItem;
-    if (typeof candidate.id !== 'string' || candidate.id.length === 0) {
-      if (response) throw new LlmJsonError('invalid_schema', response, 'AI 响应包含无效 id');
-      throw new Error('AI 响应包含无效 id');
-    }
-    if (!VALID_CATEGORIES.includes(candidate.category)) {
+    const schemaError = getCurateItemSchemaError(item);
+    if (schemaError) {
       if (response) {
-        throw new LlmJsonError('invalid_schema', response, `AI 响应包含无效分类: ${String(candidate.category)}`);
+        throw new LlmJsonError('invalid_schema', response, schemaError);
       }
-      throw new Error(`AI 响应包含无效分类: ${String(candidate.category)}`);
+      throw new Error(schemaError);
     }
 
-    return candidate;
+    return item as LlmCuratedItem;
   });
+}
+
+function filterValidCurateItems(items: unknown): { items: LlmCuratedItem[]; rejectedCount: number } {
+  if (!Array.isArray(items)) return { items: [], rejectedCount: 0 };
+
+  const validItems: LlmCuratedItem[] = [];
+  let rejectedCount = 0;
+  for (const item of items) {
+    if (getCurateItemSchemaError(item)) {
+      rejectedCount += 1;
+    } else {
+      validItems.push(item as LlmCuratedItem);
+    }
+  }
+
+  return { items: validItems, rejectedCount };
 }
 
 function parseCurateResponse(raw: string | LlmJsonResponse): LlmCuratedItem[] {
@@ -485,18 +536,42 @@ function parseCurateResponse(raw: string | LlmJsonResponse): LlmCuratedItem[] {
   return validateCurateItems(parsed.items, raw);
 }
 
+function parseMainCurateResponse(raw: LlmJsonResponse): { items: LlmCuratedItem[]; rejectedCount: number } {
+  const parsed = parseStructuredJson<Record<string, unknown>>(raw);
+  if (!Array.isArray(parsed.items)) {
+    throw new LlmJsonError('invalid_schema', raw, 'AI 响应缺少顶层 items 数组');
+  }
+
+  const result = filterValidCurateItems(parsed.items);
+  if (result.items.length === 0 && result.rejectedCount > 0) {
+    throw new LlmJsonError('invalid_schema', raw, 'AI 响应没有任何 schema 有效条目');
+  }
+
+  return result;
+}
+
 // Accepts a plain string or an array of strings (AI sometimes returns arrays).
 const normalizeString = (v: unknown): string | null =>
   Array.isArray(v)
-    ? (v as unknown[]).every((x) => typeof x === 'string') ? (v as string[]).join(' ') : null
-    : typeof v === 'string' ? v : null;
+    ? (v as unknown[]).every((x) => typeof x === 'string') ? normalizeWhitespace((v as string[]).join(' ')) : null
+    : typeof v === 'string' ? normalizeWhitespace(v) : null;
+
+const normalizeOptionalString = (value: unknown): string | null =>
+  value == null ? '' : normalizeString(value);
+
+function isSubstantiveReaderBrief(brief: ReaderBrief): boolean {
+  return brief.keyPoints.length > 0 ||
+    brief.claims.length > 0 ||
+    brief.signals.length > 0 ||
+    brief.whyItMatters.trim().length > 0;
+}
 
 export function parseReaderBrief(raw: string | LlmJsonResponse): ReaderBrief {
   const parsed = typeof raw === 'string'
     ? parseJson<Record<string, unknown>>(raw)
     : parseStructuredJson<Record<string, unknown>>(raw);
   const summary = normalizeString(parsed.summary);
-  const whyItMatters = normalizeString(parsed.whyItMatters);
+  const whyItMatters = normalizeOptionalString(parsed.whyItMatters);
   const keyPoints = normalizeOptionalStringArray(parsed.keyPoints);
   const claims = normalizeOptionalStringArray(parsed.claims);
   const signals = normalizeOptionalStringArray(parsed.signals);
@@ -504,13 +579,14 @@ export function parseReaderBrief(raw: string | LlmJsonResponse): ReaderBrief {
 
   if (
     !summary ||
-    !whyItMatters ||
+    whyItMatters == null ||
     !keyPoints ||
     !claims ||
     !signals ||
     !caveats
   ) {
     console.error(`❌ || parseReaderBrief error, parsed: `, JSON.stringify(parsed, null, 2));
+    console.error(`❌ || whyItMatters`, whyItMatters);
     console.error(`❌ || keyPoints`, keyPoints);
     console.error(`❌ || claims`, claims);
     console.error(`❌ || signals`, signals);
@@ -622,12 +698,20 @@ export async function attachReaderBriefs(
     const i = index++;
     if (i >= items.length) return;
     const item = items[i];
-    results[i] =
-      item.source === 'substack' && item.kind !== 'substack_roundup_entry'
-        ? item.readerBrief
-          ? item
-          : { ...item, readerBrief: await reader(item) }
-        : item;
+    if (item.source === 'substack' && item.kind !== 'substack_roundup_entry') {
+      if (item.readerBrief) {
+        results[i] = item;
+      } else if (isSubstackTeaserOnly(item)) {
+        results[i] = { ...item, substackTeaserOnly: true };
+      } else {
+        const readerBrief = await reader(item);
+        results[i] = isSubstantiveReaderBrief(readerBrief)
+          ? { ...item, readerBrief }
+          : { ...item, substackTeaserOnly: true };
+      }
+    } else {
+      results[i] = item;
+    }
     await runNext();
   }
 
@@ -657,10 +741,11 @@ export function buildCollectedItemsPayload(items: CollectedItem[]): string {
           `Title: ${item.title ?? 'Untitled'}`,
           `Subtitle: ${item.subtitle ?? 'None'}`,
           `URL: ${item.url}`,
+          item.substackTeaserOnly ? 'Content access: teaser-only / subscriber preview; full article body was not available' : null,
           ...rankingLines,
           item.readerBrief ? formatReaderBrief(item.readerBrief) : `Excerpt: ${item.text}`,
           formatMediaForPrompt(item.media),
-        ].join('\n');
+        ].filter((line): line is string => Boolean(line)).join('\n');
       }
 
       return [
@@ -861,6 +946,7 @@ export function enrichCuratedItems(items: LlmCuratedItem[], collectedItems: Coll
 async function parseCurateItemsWithRetry(
   request: JsonCallRequest,
   options: LlmJsonCallOptions = {},
+  parseMode: 'strict' | 'main_partial' = 'strict',
 ): Promise<LlmCuratedItem[]> {
   const jsonCaller = options.jsonCaller ?? generateJsonResponse;
   const warn = options.warn ?? console.warn;
@@ -869,6 +955,13 @@ async function parseCurateItemsWithRetry(
   for (let attempt = 1; attempt <= JSON_RETRY_LIMIT; attempt += 1) {
     const response = await jsonCaller(request);
     try {
+      if (parseMode === 'main_partial') {
+        const result = parseMainCurateResponse(response);
+        if (result.rejectedCount > 0) {
+          warn(`[curate] ${request.callLabel} 丢弃 ${result.rejectedCount} 条 schema 无效条目，继续处理有效条目`);
+        }
+        return result.items;
+      }
       return parseCurateResponse(response);
     } catch (error) {
       lastError = error;
@@ -964,6 +1057,7 @@ export async function curateWithModel(
       userContent,
     },
     options,
+    'main_partial',
   );
 }
 

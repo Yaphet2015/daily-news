@@ -233,12 +233,89 @@ test('attachReaderBriefs skips Substack roundup child items', async () => {
   assert.equal(items[1].readerBrief, undefined);
 });
 
-test('parseReaderBrief rejects malformed JSON payloads', () => {
+test('attachReaderBriefs marks teaser-only Substack posts and skips reader calls', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).attachReaderBriefs, 'function');
+
+  const attachReaderBriefs = (curateModule as Record<string, Function>).attachReaderBriefs;
+  let calls = 0;
+
+  const items = await attachReaderBriefs(
+    [
+      {
+        id: 'ss-lenny-teaser',
+        source: 'substack',
+        kind: 'substack_post',
+        title: 'Community Wisdom',
+        subtitle: 'Community Wisdom 191',
+        text: 'Community Wisdom 191',
+        body:
+          'Hello and welcome to this week’s edition of Community Wisdom, a subscriber-only email, delivered every Saturday, highlighting the most helpful conversations in our members-only Slack community. Read more',
+        author: { name: "Lenny's Newsletter" },
+        publication: { name: "Lenny's Newsletter", handle: 'lenny', url: 'https://www.lennysnewsletter.com' },
+        publishedAt: '2026-06-27T17:09:06.000Z',
+        url: 'https://www.lennysnewsletter.com/p/community-wisdom-beating-a-career',
+        media: [],
+      },
+    ],
+    async () => {
+      calls += 1;
+      return {
+        summary: 'should not be used',
+        keyPoints: ['point'],
+        claims: ['claim'],
+        whyItMatters: 'why',
+        signals: ['signal'],
+        caveats: [],
+      };
+    },
+  );
+
+  assert.equal(calls, 0);
+  assert.equal(items[0].readerBrief, undefined);
+  assert.equal(items[0].substackTeaserOnly, true);
+});
+
+test('attachReaderBriefs drops non-substantive reader briefs instead of rewarding teaser summaries', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).attachReaderBriefs, 'function');
+
+  const attachReaderBriefs = (curateModule as Record<string, Function>).attachReaderBriefs;
+  const items = await attachReaderBriefs(
+    [
+      {
+        id: 'ss-empty-brief',
+        source: 'substack',
+        kind: 'substack_post',
+        title: 'Article',
+        subtitle: 'Subtitle',
+        text: 'A short public excerpt for a longer article.',
+        body:
+          'A short public excerpt for a longer article that is not enough to support a substantive reader brief yet.',
+        author: { name: 'Pub' },
+        publication: { name: 'Pub', handle: 'pub', url: 'https://pub.substack.com' },
+        publishedAt: '2026-03-15T01:00:00Z',
+        url: 'https://pub.substack.com/p/article',
+        media: [],
+      },
+    ],
+    async () => ({
+      summary: 'Only the introduction is visible.',
+      keyPoints: [],
+      claims: [],
+      whyItMatters: '',
+      signals: [],
+      caveats: ['Full body not available.'],
+    }),
+  );
+
+  assert.equal(items[0].readerBrief, undefined);
+});
+
+test('parseReaderBrief rejects payloads without a summary', () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
 
   const parseReaderBrief = (curateModule as Record<string, Function>).parseReaderBrief;
   assert.throws(
-    () => parseReaderBrief('{"summary":"only summary"}'),
+    () => parseReaderBrief('{"keyPoints":["point"]}'),
     /reader brief/i,
   );
 });
@@ -289,6 +366,26 @@ test('parseReaderBrief normalizes missing list fields to empty arrays', () => {
   });
 });
 
+test('parseReaderBrief normalizes empty or missing whyItMatters to an empty string', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
+
+  const parseReaderBrief = (curateModule as Record<string, Function>).parseReaderBrief;
+  for (const whyItMatters of [[], '', null, undefined]) {
+    const brief = parseReaderBrief(
+      JSON.stringify({
+        summary: 'Summary',
+        keyPoints: ['Point'],
+        claims: ['Claim'],
+        ...(whyItMatters === undefined ? {} : { whyItMatters }),
+        signals: ['Signal'],
+        caveats: [],
+      }),
+    );
+
+    assert.equal(brief.whyItMatters, '');
+  }
+});
+
 test('parseReaderBrief still rejects invalid list payload types', () => {
   assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
 
@@ -301,6 +398,26 @@ test('parseReaderBrief still rejects invalid list payload types', () => {
           keyPoints: 'not-an-array',
           claims: [],
           whyItMatters: 'Why',
+          signals: [],
+          caveats: [],
+        }),
+      ),
+    /reader brief/i,
+  );
+});
+
+test('parseReaderBrief still rejects invalid whyItMatters payload types', () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).parseReaderBrief, 'function');
+
+  const parseReaderBrief = (curateModule as Record<string, Function>).parseReaderBrief;
+  assert.throws(
+    () =>
+      parseReaderBrief(
+        JSON.stringify({
+          summary: 'Summary',
+          keyPoints: [],
+          claims: [],
+          whyItMatters: { text: 'Why' },
           signals: [],
           caveats: [],
         }),
@@ -364,6 +481,119 @@ test('curateWithModel retries once after an empty main_curate response and then 
       editorialReason: '值得关注。',
     },
   ]);
+});
+
+test('curateWithModel drops malformed main_curate rows when valid rows remain', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).curateWithModel, 'function');
+
+  const curateWithModel = (curateModule as Record<string, Function>).curateWithModel;
+  let calls = 0;
+
+  const items = await curateWithModel('system', 'user', {
+    model: 'fake-main-model',
+    jsonCaller: async () => {
+      calls += 1;
+      return {
+        callLabel: 'main_curate',
+        model: 'fake-main-model',
+        rawText: JSON.stringify({
+          items: [
+            {
+              id: 'tw-valid',
+              title: '有效标题',
+              summary: '有效摘要',
+              url: 'https://example.com/valid',
+              author: 'Alice',
+              category: 'Product',
+              editorialReason: '值得关注。',
+            },
+            {
+              id: 'tw-missing-category',
+              title: '缺少分类',
+              summary: '这条缺少 category。',
+              url: 'https://example.com/missing-category',
+              author: 'Bob',
+              editorialReason: '不应拖垮整批。',
+            },
+            {
+              id: 12345,
+              title: '错误 ID',
+              summary: '这条 id 类型错误。',
+              url: 'https://example.com/bad-id',
+              author: 'Carol',
+              category: 'Tutorial',
+              editorialReason: '不应拖垮整批。',
+            },
+          ],
+        }),
+        finishReason: 'stop',
+        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+      };
+    },
+    warn: () => {},
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(items, [
+    {
+      id: 'tw-valid',
+      title: '有效标题',
+      summary: '有效摘要',
+      url: 'https://example.com/valid',
+      author: 'Alice',
+      category: 'Product',
+      editorialReason: '值得关注。',
+    },
+  ]);
+});
+
+test('curateWithModel retries when every main_curate row is malformed', async () => {
+  assert.equal(typeof (curateModule as Record<string, unknown>).curateWithModel, 'function');
+
+  const curateWithModel = (curateModule as Record<string, Function>).curateWithModel;
+  let calls = 0;
+
+  const items = await curateWithModel('system', 'user', {
+    model: 'fake-main-model',
+    jsonCaller: async () => {
+      calls += 1;
+      return {
+        callLabel: 'main_curate',
+        model: 'fake-main-model',
+        rawText: JSON.stringify({
+          items: calls === 1
+            ? [
+                {
+                  id: 'tw-missing-category',
+                  title: '缺少分类',
+                  summary: '这条缺少 category。',
+                  url: 'https://example.com/missing-category',
+                  author: 'Bob',
+                  editorialReason: '需要触发重试。',
+                },
+              ]
+            : [
+                {
+                  id: 'tw-valid',
+                  title: '有效标题',
+                  summary: '有效摘要',
+                  url: 'https://example.com/valid',
+                  author: 'Alice',
+                  category: 'Product',
+                  editorialReason: '重试后成功。',
+                },
+              ],
+        }),
+        finishReason: 'stop',
+        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+      };
+    },
+    warn: () => {},
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'tw-valid');
 });
 
 test('curateWithModel surfaces metadata-rich errors after truncated fenced JSON responses', async () => {
@@ -1460,6 +1690,9 @@ test('curator prompt requires materially longer investigative summaries, editori
   assert.doesNotMatch(prompt, /at least 30 items/i);
   assert.match(prompt, /closer to 50|prefer returning closer to 50/i);
   assert.match(prompt, /`category`/);
+  assert.match(prompt, /exact item ID from the input/);
+  assert.match(prompt, /Do not invent, shorten, renumber, or repair IDs/);
+  assert.match(prompt, /omit that item/);
   assert.doesNotMatch(prompt, /`tags`/);
 });
 

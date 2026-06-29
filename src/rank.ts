@@ -135,9 +135,10 @@ function computeEditorialBreakdown(
   const hasMedia = item.media.length > 0;
   const hasBrief = Boolean(item.readerBrief);
   const hasLinkedSource = Boolean(item.linkedSource);
+  const isTeaserOnly = Boolean(item.substackTeaserOnly);
   const { penalty: authorPenalty, bonus: authorBonus } = getAuthorAdjustment(item);
   const xArticleBonus = isXArticleSource(item) ? 10 : 0;
-  const substackSourceBonus = item.source === 'substack' ? 10 : 0;
+  const substackSourceBonus = item.source === 'substack' && !isTeaserOnly ? 10 : 0;
 
   const substance = clamp(
     (text.length >= 80 ? 10 : 4) +
@@ -167,7 +168,15 @@ function computeEditorialBreakdown(
   const freshness = computeFreshnessScore(item, newestTimestamp);
   const novelty = 15;
   const actionability = clamp(actionabilityHits * 5, 0, 10);
-  const penalties = clamp(-(promoHits * 8) - (text.length < 40 ? 8 : 0) - authorPenalty - preferenceAdjustment.penalty, -30, 0);
+  const penalties = clamp(
+    -(promoHits * 8) -
+      (text.length < 40 ? 8 : 0) -
+      (isTeaserOnly ? 24 : 0) -
+      authorPenalty -
+      preferenceAdjustment.penalty,
+    -30,
+    0,
+  );
 
   return {
     substance,
@@ -239,6 +248,7 @@ function buildDecisionReasons(
   if (breakdown.freshness >= 8) reasons.push('新');
   if (isOfficialSource(item)) reasons.push('官方');
   if (breakdown.xArticleBonus > 0) reasons.push('X article');
+  if (item.substackTeaserOnly) reasons.push('订阅墙/预览内容');
   if (breakdown.substance < 12) reasons.push('低质量内容');
   if (breakdown.evidence < 6) reasons.push('弱证据');
   if (isPromotional) reasons.push('宣发内容');

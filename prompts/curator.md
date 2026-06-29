@@ -41,6 +41,8 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
   - `author`: the source author or publication-facing byline from the input
   - `category`: exactly one of `Product`, `Tutorial`, or `Opinions/Thoughts`
   - `editorialReason`: a short **Chinese** sentence explaining why this item deserves inclusion in the digest now
+- Do not invent, shorten, renumber, or repair IDs. If you cannot copy the exact item ID from the input, omit that item
+- Do not return any item without `category`, and do not return any category outside `Product`, `Tutorial`, or `Opinions/Thoughts`
 - Group items by `category`, keeping the most important items first within each category
 
 ## Editorial Principles

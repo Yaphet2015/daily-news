@@ -96,6 +96,7 @@ export interface CollectedItem {
   sourceResolution?: SourceResolution;
   selfThread?: SelfThread;
   readerBrief?: ReaderBrief;
+  substackTeaserOnly?: boolean;
   likeCount?: number;
   replyCount?: number;
   repostCount?: number;
