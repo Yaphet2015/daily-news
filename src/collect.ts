@@ -1340,7 +1340,12 @@ function isTwitterCliQueryUnspecifiedError(message: string): boolean {
 }
 
 function isTwitterCliRecommendationFallbackError(message: string): boolean {
-  return isTwitterCliQueryUnspecifiedError(message) || /Twitter API returned errors:\s*Timeout:\s*Unspecified/i.test(message);
+  return (
+    isTwitterCliQueryUnspecifiedError(message)
+    // DeadlineExceeded 是 X for-you 推荐后端的瞬态处理超期（服务端返回的错误，非客户端超时），
+    // 与 Timeout/Query Unspecified 同属可重试的瞬态错误，走降级重试而非直接中断整批采集。
+    || /Twitter API returned errors:\s*(?:Timeout|DeadlineExceeded):\s*Unspecified/i.test(message)
+  );
 }
 
 function defaultSleep(ms: number): Promise<void> {

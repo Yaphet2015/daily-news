@@ -755,6 +755,73 @@ test('collectTwitterRecommendationItems falls back to a smaller batch when twitt
   assert.match(warnings[0] ?? '', /改用最近 20 条/);
 });
 
+test('collectTwitterRecommendationItems degrades on DeadlineExceeded and keeps collecting later batches', async () => {
+  const collectTwitterRecommendationItems = (collectModule as Record<string, Function>)
+    .collectTwitterRecommendationItems;
+  const commands: string[] = [];
+  const warnings: string[] = [];
+
+  const deadlineError = new Error('twitter-cli failed') as Error & { stdout?: string };
+  deadlineError.stdout = JSON.stringify({
+    ok: false,
+    error: {
+      message: 'Twitter API error (HTTP 0): Twitter API returned errors: DeadlineExceeded: Unspecified',
+    },
+  });
+
+  const payload = (id: string) => ({
+    stderr: '',
+    stdout: JSON.stringify({
+      ok: true,
+      data: [
+        {
+          id,
+          text: `tweet ${id}`,
+          author: { id: 'user-1', name: 'Alice', screenName: 'alice' },
+          createdAt: '2026-03-15T09:00:00Z',
+          media: [],
+        },
+      ],
+    }),
+  });
+
+  let seenMax50 = 0;
+  const result = await collectTwitterRecommendationItems(0, {
+    batchSize: 50,
+    batchCount: 6,
+    fetchRecommendationAuth: async () => ({ authToken: 'recommend-auth', ct0: 'recommend-ct0' }),
+    execTwitterCliCommand: async (command: string) => {
+      commands.push(command);
+      if (command.includes('--max 50')) {
+        seenMax50 += 1;
+        // 只有第 1 批的首次请求触发瞬态 DeadlineExceeded，降级为 --max 20 后成功；后续批次正常返回。
+        if (seenMax50 === 1) throw deadlineError;
+        return payload(`recommend-${seenMax50}`);
+      }
+      assert.match(command, /--max 20\b/);
+      return payload('recommend-1');
+    },
+    topicGate: async (items: Array<{ id: string }>) => new Set(items.map((item) => item.id)),
+    warn: (message: string) => warnings.push(message),
+    sleep: async () => {},
+  });
+
+  // 关键意图：第 1 批的瞬态 DeadlineExceeded 只触发降级重试（50→20），不连坐中断后续 5 批。
+  // 若有人回退成"直接 break"，此处的命令序列与 items 都会变短而失败。
+  assert.deepEqual(
+    commands.map((command) => command.match(/--max \d+/)?.[0]),
+    [
+      '--max 50', '--max 20',
+      '--max 50', '--max 50', '--max 50', '--max 50', '--max 50',
+    ],
+  );
+  assert.deepEqual(result.items.map((item: { id: string }) => item.id), [
+    'recommend-1', 'recommend-2', 'recommend-3', 'recommend-4', 'recommend-5', 'recommend-6',
+  ]);
+  assert.match(result.warnings?.[0] ?? '', /改用最近 20 条/);
+  assert.match(warnings[0] ?? '', /改用最近 20 条/);
+});
+
 test('filterAiRelatedRecommendationItems sends only 500-character previews and keeps AI-related recommendations', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).filterAiRelatedRecommendationItems, 'function');
 
