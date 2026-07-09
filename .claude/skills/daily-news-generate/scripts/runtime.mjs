@@ -9,6 +9,9 @@ const DEFAULT_REPO_ROOT = '/Users/suosuo/workspace/personal/daily-news';
 const DEFAULT_CURATE_POOL = 80;
 const DEFAULT_SELECT_TARGET_MIN = 6;
 const DEFAULT_SELECT_TARGET_MAX = 10;
+// Pinned so the select URL is stable across restarts: an agent re-run lands on the same port,
+// and the user's already-open tab (whose confirm POST targets this origin) keeps working.
+const DEFAULT_SELECT_PORT = 8427;
 
 // Only the modules this engine actually imports. The agent-driven pipeline
 // never calls any LLM: curateModule is imported solely for the deterministic
@@ -54,11 +57,13 @@ Agent-driven pipeline (no third-party LLM — the agent curates):
                        the candidate pool the agent curates from.
   curate-apply         Enrich the agent's output/<date>-curate-output.json into
                        output/<date>-curation.json (CuratedItem[] + diagnostics).
-  select [--force]     Serve an interactive HTML page on a local port; on confirm it writes
-                       output/<date>-selection.json. Idempotent unless --force.
+  select [--force]     Serve an interactive HTML page on a stable local port and block until the
+                       user confirms, writing output/<date>-selection.json. Selections persist in
+                       the browser across reloads. Idempotent unless --force.
   publish              Format the selection, publish files, advance state, clear the draft.
 
-Default command: status. Set DAILY_NEWS_REPO to override the daily-news repo path.`);
+Default command: status. Set DAILY_NEWS_REPO to override the daily-news repo path.
+Env: DAILY_NEWS_SELECT_PORT (default 8427) pins the select server port.`);
 }
 
 function hasHelp(args) {
@@ -443,6 +448,9 @@ export function buildSelectHtml(curation, serverOrigin) {
 </footer>
 <script>
 const DATA = ${dataJson};
+// Persist the user's ticks across reloads/restarts so an accidental refresh or a server
+// restart never loses their selections.
+const STORE_KEY = 'daily-news-select-' + DATA.date;
 const CATS = ['Product','Tutorial','Opinions/Thoughts'];
 const byCat = {};
 for (const c of CATS) byCat[c] = [];
@@ -462,7 +470,7 @@ for (const cat of CATS) {
 function renderItem(it){
   const label = document.createElement('label'); label.className='item';
   const cb = document.createElement('input'); cb.type='checkbox'; cb.value=it.id; cb.dataset.id=it.id;
-  cb.addEventListener('change', recount);
+  cb.addEventListener('change', () => { recount(); saveSelection(); });
   const body = document.createElement('div'); body.className='body';
   const title = document.createElement('div'); title.className='title'; title.textContent = it.title; body.appendChild(title);
   const sum = document.createElement('div'); sum.className='summary'; sum.textContent = it.summary; body.appendChild(sum);
@@ -499,8 +507,16 @@ function recount(){
   if (n>=DATA.targetMin && n<=DATA.targetMax) el.classList.add('ok');
   else if (n>DATA.targetMax) el.classList.add('bad');
 }
-document.getElementById('all').addEventListener('click',()=>{ document.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true); recount(); });
-document.getElementById('none').addEventListener('click',()=>{ document.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false); recount(); });
+function checkedIds(){ return [...document.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.dataset.id); }
+function saveSelection(){ try { localStorage.setItem(STORE_KEY, JSON.stringify(checkedIds())); } catch(e){} }
+function restoreSelection(){
+  let ids; try { ids = JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch(e){ return; }
+  if (!Array.isArray(ids) || !ids.length) return;
+  const set = new Set(ids);
+  document.querySelectorAll('input[type=checkbox]').forEach(c=>{ if (set.has(c.dataset.id)) c.checked = true; });
+}
+document.getElementById('all').addEventListener('click',()=>{ document.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true); recount(); saveSelection(); });
+document.getElementById('none').addEventListener('click',()=>{ document.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false); recount(); saveSelection(); });
 document.getElementById('confirm').addEventListener('click', confirm);
 async function confirm(){
   const ids=[...document.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.dataset.id);
@@ -514,12 +530,13 @@ async function confirm(){
     msg.className='msg ok'; msg.textContent='✓ 已保存 '+data.count+' 条选择，可以关闭页面并回到终端。';
     document.querySelectorAll('input[type=checkbox]').forEach(c=>c.disabled=true);
     document.getElementById('all').disabled=true; document.getElementById('none').disabled=true;
+    try { localStorage.removeItem(STORE_KEY); } catch(e){}
   }catch(err){
     msg.className='msg bad'; msg.textContent='提交失败：'+err.message+'（服务器可能已关闭，请重新运行 select）';
     document.getElementById('confirm').disabled=false;
   }
 }
-recount();
+restoreSelection(); recount();
 </script>
 </body>
 </html>`;
@@ -723,7 +740,26 @@ function readRequestBody(req) {
   });
 }
 
-async function runSelect({ pipeline, repoRoot, args, log }) {
+export function resolveSelectPort(env = process.env) {
+  const raw = env.DAILY_NEWS_SELECT_PORT;
+  const port = raw === undefined || raw === null || raw === '' ? DEFAULT_SELECT_PORT : Number(raw);
+  if (!Number.isFinite(port) || port < 1 || port > 65535 || !Number.isInteger(port)) {
+    throw new Error(`Invalid DAILY_NEWS_SELECT_PORT: ${String(raw)}`);
+  }
+  return port;
+}
+
+async function probeHealth(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    const data = await res.json().catch(() => ({}));
+    return res.ok && data.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
   const draft = await readDraftOrFail(pipeline);
   const date = formatDateFromUnixSeconds(draft.collectedAt);
   const curationPath = artifactPath(repoRoot, date, 'curation.json');
@@ -799,11 +835,23 @@ async function runSelect({ pipeline, repoRoot, args, log }) {
     });
 
     let html = '';
+    const desiredPort = resolveSelectPort(env);
+    const origin = `http://127.0.0.1:${desiredPort}`;
 
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      const origin = `http://127.0.0.1:${port}`;
+    server.on('error', async (err) => {
+      // Port already taken. If it's one of our own select servers, reuse it — it will write the
+      // selection file on confirm and the agent's poll will pick that up. Otherwise fail loud.
+      if (err && err.code === 'EADDRINUSE' && (await probeHealth(desiredPort))) {
+        server.close();
+        log(`SELECT_URL=${origin}/ (reusing already-running select server on port ${desiredPort})`);
+        log(`SELECTION_FILE=${selectionPath}`);
+        log('STATUS=waiting — a select server is already running. Open the URL and click 确认发布.');
+        resolve();
+        return;
+      }
+      reject(err);
+    });
+    server.listen(desiredPort, '127.0.0.1', () => {
       html = buildSelectHtml(curation, origin);
       // Persist a static copy as an audit trail / file:// fallback (raw HTML, not JSON).
       mkdir(dirname(htmlPath), { recursive: true })
@@ -824,8 +872,9 @@ async function runSelect({ pipeline, repoRoot, args, log }) {
     process.once('SIGTERM', () => shutdown('SIGTERM'));
   });
 
-  // Reached only after process.exit(0) is short-circuited in tests.
-  return `daily-news select: selection saved at ${selectionPath}`;
+  // Reached only when a confirm was short-circuited in tests, or in the reuse path (another select
+  // server was already running on this port and will write the file on confirm).
+  return `daily-news select: waiting for confirm; selection will be written to ${selectionPath}`;
 }
 
 export async function runPublish({ pipeline, repoRoot, log }) {
@@ -925,7 +974,7 @@ export async function runAgent({
     case 'curate-apply':
       return runCurateApply({ pipeline, repoRoot, log });
     case 'select':
-      return runSelect({ pipeline, repoRoot, args, log });
+      return runSelect({ pipeline, repoRoot, args, log, env });
     case 'publish':
       return runPublish({ pipeline, repoRoot, log });
     default:

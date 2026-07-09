@@ -12,6 +12,7 @@ import {
   mergeForcedSelectItems,
   parseCliArgs,
   resolveRepoRoot,
+  resolveSelectPort,
   resolveSelection,
   runPublish,
   trimCandidatePool,
@@ -164,6 +165,21 @@ test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every 
   assert.match(html, /recommendation feed skipped/);
   // The confirm button and a per-item checkbox must exist.
   assert.match(html, /id="confirm"/);
+  // Selections persist in the browser across reloads/restarts (localStorage), so a restart never loses ticks.
+  assert.match(html, /localStorage/);
+  assert.match(html, /restoreSelection/);
+  assert.match(html, /saveSelection/);
+  assert.match(html, /daily-news-select-/);
+});
+
+test('resolveSelectPort honors DAILY_NEWS_SELECT_PORT, falls back to the default, and validates', () => {
+  assert.equal(resolveSelectPort({}), 8427);
+  assert.equal(resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '' }), 8427);
+  assert.equal(resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '9100' }), 9100);
+  assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: 'nope' }), /Invalid DAILY_NEWS_SELECT_PORT/);
+  assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '0' }), /Invalid DAILY_NEWS_SELECT_PORT/);
+  assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '70000' }), /Invalid DAILY_NEWS_SELECT_PORT/);
+  assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '1.5' }), /Invalid DAILY_NEWS_SELECT_PORT/);
 });
 
 // ───────────────────────── publish wiring (fake pipeline) ─────────────────────────

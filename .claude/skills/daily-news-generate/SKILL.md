@@ -26,7 +26,7 @@ Set `DAILY_NEWS_REPO=/path/to/daily-news` only when using a non-default checkout
 | `collect [--resume\|--discard]` | Collect into `data/pending-draft.json`. With an existing draft and no flag it reports and exits so you can ask the user. |
 | `curate-input` | Deterministic rank → `output/<date>-curate-input.json` (the pool **you** curate from). |
 | `curate-apply` | Enrich **your** `output/<date>-curate-output.json` into `output/<date>-curation.json`. |
-| `select [--force]` | Serve interactive HTML on a local port; on confirm it writes `output/<date>-selection.json`. |
+| `select [--force]` | Serve interactive HTML on a **stable** port (default 8427, override `DAILY_NEWS_SELECT_PORT`); blocks until the user confirms, then writes `output/<date>-selection.json`. Selections persist in the browser across reloads. |
 | `publish` | Format + publish files, advance `data/state.json`, clear the draft. |
 
 ## Hard rules
@@ -36,6 +36,10 @@ Set `DAILY_NEWS_REPO=/path/to/daily-news` only when using a non-default checkout
   are fine — they are pure functions.
 - Do not run `npm run …` scripts or the monolithic `src/generate.ts` entrypoint.
 - Do not auto-select or auto-publish. Selection is the user's, in the HTML page.
+- **During `select`, never end your turn while the server is still needed.** A background bash task is reaped
+  (SIGTERM) the moment your turn ends, which kills the select server mid-selection and makes the user's 确认发布
+  fail with "Failed to fetch". Keep the turn alive by polling for the selection file (see stage 5); only after it
+  exists may you proceed.
 - Fail loud: if any stage output is missing, malformed, empty, or rejected every item, stop and report — do not paper over it.
 - Treat `twitter-feed stderr` `ClientTransaction` noise as non-fatal unless paired with a JSON parse failure, `ok:false`, or child-process exit failure.
 - Preserve auditability for teaser-only Substack content; do not summarize inaccessible preview text as if it were the full article.
@@ -118,12 +122,29 @@ items with bad ids/urls or duplicates, and writes `output/<date>-curation.json` 
 curated items or many rejections, inspect: usually a copied-id or copied-url mistake in your `curate-output.json`.
 
 ### 5. select (user, via HTML)
-Run **`select` in the background** (`run_in_background: true`). Read `SELECT_URL=` and `SELECTION_FILE=` from its
-output, give the URL to the user, and ask them to open it, choose **6–10** items, and click 确认发布. The server
-writes `output/<date>-selection.json` on confirm and exits. You can wait on the background task or poll for the
-`SELECTION_FILE`; once it exists, proceed. (If the browser can't reach the page, the user's proxy is likely
-intercepting `127.0.0.1` — have them add `127.0.0.1`/`localhost` to the proxy bypass list, then re-open.)
-Re-running `select` is idempotent unless `--force`.
+The select server must stay alive from the moment you start it until the user clicks 确认发布. In this harness a
+background bash task is reaped (SIGTERM) when your turn ends — so the server only survives while you keep a tool
+call running. Procedure:
+
+1. Launch **`select` in the background** (`run_in_background: true`). It binds a **stable** port (default 8427,
+   override `DAILY_NEWS_SELECT_PORT`) and stays up until confirm. Read `SELECT_URL=` and `SELECTION_FILE=` from its
+   output.
+2. In the **same turn**, give the user the URL and ask them to open it, choose **6–10** items, and click 确认发布.
+3. Immediately run a **foreground** wait that polls for the `SELECTION_FILE` (Bash, `timeout` ~590000ms). This is
+   what keeps the turn — and therefore the server — alive.
+4. **Do not end your turn while waiting** — no final message, no handing control back. If the poll times out with no
+   selection yet, **re-issue the foreground poll in the same turn** and keep waiting. The server stays up on its
+   stable port and the user's ticks are persisted in the browser (localStorage), so neither a server restart nor an
+   accidental reload loses selections.
+5. Once the selection file exists, proceed to `publish`.
+
+The page persists selections to localStorage (keyed by date); the confirm endpoint is `serverOrigin + '/select'`
+POST `{date, selectedIds}`. If the browser can't reach the page, the user's proxy is likely intercepting `127.0.0.1`
+— have them add `127.0.0.1`/`localhost` to the proxy bypass list, then re-open.
+
+**Escape hatch:** the user may interrupt and paste their picks (by title/number from the curation). In that case
+write `output/<date>-selection.json` directly as `{date, selectedItems}` (resolve ids against
+`output/<date>-curation.json`), then run `publish`. Re-running `select` is idempotent unless `--force`.
 
 ### 6. publish (you complete it)
 Run `publish` once `output/<date>-selection.json` exists. It formats the selection, writes
