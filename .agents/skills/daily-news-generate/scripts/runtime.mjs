@@ -63,7 +63,8 @@ Agent-driven pipeline (no third-party LLM — the agent curates):
   publish              Format the selection, publish files, advance state, clear the draft.
 
 Default command: status. Set DAILY_NEWS_REPO to override the daily-news repo path.
-Env: DAILY_NEWS_SELECT_PORT (default 8427) pins the select server port.`);
+Env: DAILY_NEWS_SELECT_PORT (default 8427) pins the select server port.
+     DAILY_NEWS_COLLECT_NOW_SECONDS overrides the collection cutoff Unix timestamp.`);
 }
 
 function hasHelp(args) {
@@ -597,7 +598,17 @@ async function runStatus({ pipeline, repoRoot, log }) {
   return lines.join('\n');
 }
 
-async function runCollect({ pipeline, args, log }) {
+function resolveCollectNowSeconds(env = process.env) {
+  const raw = env.DAILY_NEWS_COLLECT_NOW_SECONDS;
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid DAILY_NEWS_COLLECT_NOW_SECONDS: ${raw}`);
+  }
+  return parsed;
+}
+
+async function runCollect({ pipeline, args, log, env = process.env }) {
   const existing = await pipeline.draftModule.readPendingDraft();
 
   if (existing && !args.discard) {
@@ -621,7 +632,7 @@ async function runCollect({ pipeline, args, log }) {
   }
 
   const publishedState = await pipeline.stateModule.readState();
-  const snapshot = await pipeline.collectModule.collect(publishedState);
+  const snapshot = await pipeline.collectModule.collect(publishedState, resolveCollectNowSeconds(env));
   if (!snapshot.items || snapshot.items.length === 0) {
     throw new Error('daily-news collect returned zero items');
   }
