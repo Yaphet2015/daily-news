@@ -2798,6 +2798,13 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
     ...recommendationResult.items,
   ];
   const collapsed = collapseNumberedSelfThreads(filtered);
+  if (process.env.DAILY_NEWS_SKIP_TWITTER_PRIMARY_SOURCE_RESOLUTION?.trim() === '1') {
+    console.log(`[collect] 跳过 Twitter primary source 解析，共采集 ${collapsed.length} 条内容`);
+    return {
+      items: sortNewestFirst(collapsed),
+      warnings: recommendationResult.warnings,
+    };
+  }
   const sharedShortUrlResolver = createShortUrlResolver();
   const sharedLinkedPageFetcher = createLinkedPageFetcher();
   const twitterEnrichmentBreaker = createTwitterEnrichmentCircuitBreaker();
