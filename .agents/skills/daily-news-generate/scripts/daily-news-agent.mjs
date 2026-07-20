@@ -4,7 +4,6 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DEFAULT_REPO_ROOT = '/Users/suosuo/workspace/personal/daily-news';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const runtimePath = path.join(__dirname, 'runtime.mjs');
 
@@ -12,7 +11,7 @@ function resolveRepoRoot() {
   if (process.env.DAILY_NEWS_REPO?.trim()) {
     return path.resolve(process.cwd(), process.env.DAILY_NEWS_REPO.trim());
   }
-  return DEFAULT_REPO_ROOT;
+  return process.cwd();
 }
 
 function resolveTsxLoader(repoRoot) {

@@ -5,7 +5,6 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 
-const DEFAULT_REPO_ROOT = '/Users/suosuo/workspace/personal/daily-news';
 const DEFAULT_CURATE_POOL = 80;
 const DEFAULT_SELECT_TARGET_MIN = 6;
 const DEFAULT_SELECT_TARGET_MAX = 10;
@@ -90,7 +89,7 @@ export function resolveRepoRoot({ cwd = process.cwd(), env = process.env } = {})
   if (env.DAILY_NEWS_REPO?.trim()) {
     return resolve(cwd, env.DAILY_NEWS_REPO.trim());
   }
-  return DEFAULT_REPO_ROOT;
+  return cwd;
 }
 
 function modulePath(repoRoot, name) {

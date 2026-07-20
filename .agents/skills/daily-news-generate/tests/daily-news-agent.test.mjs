@@ -57,6 +57,13 @@ test('resolveRepoRoot honors an absolute DAILY_NEWS_REPO without doubling the pa
   );
 });
 
+test('resolveRepoRoot falls back to cwd when DAILY_NEWS_REPO is unset (no hardcoded machine path)', () => {
+  // Regression intent: the default must NOT be a hardcoded absolute path belonging to a
+  // specific developer's machine. Running the skill from the repo root just works.
+  assert.equal(resolveRepoRoot({ cwd: '/any/repo/root', env: {} }), '/any/repo/root');
+  assert.equal(resolveRepoRoot({ cwd: '/any/repo/root', env: { DAILY_NEWS_REPO: '   ' } }), '/any/repo/root');
+});
+
 test('validatePreflight reports only the modules this engine imports, and never package scripts', async () => {
   const repo = await makeTempRepo();
   try {
