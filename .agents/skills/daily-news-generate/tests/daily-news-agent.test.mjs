@@ -17,6 +17,7 @@ import {
   runPublish,
   trimCandidatePool,
   validatePreflight,
+  findMostRecentSelectPid,
 } from '../scripts/runtime.mjs';
 
 // ───────────────────────── fixtures ─────────────────────────
@@ -40,10 +41,14 @@ async function makeTempRepo() {
 
 // ───────────────────────── cli + repo resolution ─────────────────────────
 
-test('parseCliArgs defaults to status, captures flags, rejects unknown stages', () => {
-  assert.deepEqual(parseCliArgs([]), { command: 'status', resume: false, discard: false, force: false });
+test('parseCliArgs defaults to collect, captures flags, rejects unknown stages', () => {
+  assert.deepEqual(parseCliArgs([]), { command: 'collect', resume: false, discard: false, force: false });
   assert.deepEqual(parseCliArgs(['collect', '--resume']), { command: 'collect', resume: true, discard: false, force: false });
   assert.deepEqual(parseCliArgs(['select', '--force']), { command: 'select', resume: false, discard: false, force: true });
+  // select-start / select-stop are valid commands; --force still parses for select-start.
+  assert.deepEqual(parseCliArgs(['select-start']), { command: 'select-start', resume: false, discard: false, force: false });
+  assert.deepEqual(parseCliArgs(['select-start', '--force']), { command: 'select-start', resume: false, discard: false, force: true });
+  assert.deepEqual(parseCliArgs(['select-stop']), { command: 'select-stop', resume: false, discard: false, force: false });
   assert.equal(parseCliArgs(['--help']).command, 'help');
   assert.throws(() => parseCliArgs(['review']), /Unsupported daily-news agent command/);
 });
@@ -149,6 +154,28 @@ test('annotateRankedItems marks selectedByHuman only when a selection is provide
   assert.equal(annotated[0].selectedByHuman, true);
   const noSelection = annotateRankedItems([{ id: '1' }], [{ id: '1' }], [{ id: '1' }]);
   assert.equal(noSelection[0].selectedByHuman, undefined);
+});
+
+// ───────────────────────── detached select cleanup ─────────────────────────
+
+test('findMostRecentSelectPid locates the latest output/*-select.pid by date (post-publish cleanup)', async () => {
+  // Intent: after publish the draft is cleared, so select-stop cannot read the date from the draft —
+  // it must find the pid by scanning output/. It picks the newest DATE, not filesystem creation order,
+  // and returns null when nothing is running so cleanup is a safe no-op.
+  const repo = await mkdtemp(join(tmpdir(), 'daily-news-skill-test-'));
+  try {
+    const out = join(repo, 'output');
+    await mkdir(out, { recursive: true });
+    assert.equal(await findMostRecentSelectPid(repo), null); // nothing to stop
+    await writeFile(join(out, '2026-07-19-select.pid'), '111');
+    await writeFile(join(out, '2026-07-21-select.pid'), '222');
+    await writeFile(join(out, '2026-07-20-select.pid'), '333'); // written last, but not the newest date
+    const found = await findMostRecentSelectPid(repo);
+    assert.equal(found.date, '2026-07-21');
+    assert.equal(found.path, join(out, '2026-07-21-select.pid'));
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
 });
 
 // ───────────────────────── select html ─────────────────────────

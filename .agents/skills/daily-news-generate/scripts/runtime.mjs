@@ -1,9 +1,11 @@
 import { createRequire } from 'node:module';
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync, openSync } from 'node:fs';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
 
 const DEFAULT_CURATE_POOL = 80;
 const DEFAULT_SELECT_TARGET_MIN = 6;
@@ -36,6 +38,8 @@ const VALID_COMMANDS = new Set([
   'curate-input',
   'curate-apply',
   'select',
+  'select-start',
+  'select-stop',
   'publish',
 ]);
 
@@ -56,12 +60,20 @@ Agent-driven pipeline (no third-party LLM — the agent curates):
                        the candidate pool the agent curates from.
   curate-apply         Enrich the agent's output/<date>-curate-output.json into
                        output/<date>-curation.json (CuratedItem[] + diagnostics).
-  select [--force]     Serve an interactive HTML page on a stable local port and block until the
-                       user confirms, writing output/<date>-selection.json. Selections persist in
-                       the browser across reloads. Idempotent unless --force.
+  select [--force]     Serve the interactive HTML page on a stable local port and BLOCK until the
+                       user confirms (legacy foreground mode; the agent stays working). Prefer
+                       select-start/select-stop so the agent is free during selection.
+  select-start [--force]
+                       Launch the select server DETACHED so it survives the agent's turn ending,
+                       auto-open the default browser, write output/<date>-select.pid + select.log,
+                       then return immediately. The agent is NOT blocking — end the turn so the
+                       user can steer. The server self-exits on confirm.
+  select-stop          Stop the detached select server (from select-start's select.pid) and remove
+                       the pidfile. Idempotent — run it after publish to clean up lingering servers.
   publish              Format the selection, publish files, advance state, clear the draft.
 
-Default command: status. Set DAILY_NEWS_REPO to override the daily-news repo path.
+Default command: collect (start a fresh collection; if a draft already exists it reports and
+                     exits without destroying it). Set DAILY_NEWS_REPO to override the daily-news repo path.
 Env: DAILY_NEWS_SELECT_PORT (default 8427) pins the select server port.
      DAILY_NEWS_COLLECT_NOW_SECONDS overrides the collection cutoff Unix timestamp.`);
 }
@@ -73,7 +85,7 @@ function hasHelp(args) {
 export function parseCliArgs(args) {
   if (hasHelp(args)) return { command: 'help' };
   const positional = args.filter((arg) => !arg.startsWith('-'));
-  const command = positional[0] ?? 'status';
+  const command = positional[0] ?? 'collect';
   if (!VALID_COMMANDS.has(command)) {
     throw new Error(`Unsupported daily-news agent command: ${command}`);
   }
@@ -769,6 +781,101 @@ async function probeHealth(port) {
   }
 }
 
+async function waitForSelectHealth(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await probeHealth(port)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
+}
+
+function isPortTaken(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once('error', () => resolve(true));
+    tester.once('listening', () => tester.close(() => resolve(false)));
+    tester.listen(port, '127.0.0.1');
+  });
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+}
+
+async function stopPid(pid) {
+  // Graceful SIGTERM (the select server closes + exits on SIGTERM), then SIGKILL if still alive.
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  if (!isPidAlive(pid)) return false;
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+  for (let i = 0; i < 10; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (!isPidAlive(pid)) return true;
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if (error.code === 'ESRCH') return true;
+    throw error;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  return !isPidAlive(pid);
+}
+
+function openInBrowser(url, log) {
+  // The select server opens the page itself on listen; disable for headless/CI/testing.
+  if (process.env.DAILY_NEWS_SELECT_OPEN_BROWSER === '0') {
+    log(`[daily-news-agent] browser auto-open disabled (DAILY_NEWS_SELECT_OPEN_BROWSER=0): ${url}`);
+    return;
+  }
+  let cmd;
+  let args;
+  if (process.platform === 'darwin') {
+    cmd = 'open';
+    args = [url];
+  } else if (process.platform === 'win32') {
+    cmd = 'cmd';
+    args = ['/c', 'start', '', url];
+  } else {
+    cmd = 'xdg-open';
+    args = [url];
+  }
+  try {
+    const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    child.unref();
+    child.on('spawn', () => log(`[daily-news-agent] opened default browser: ${url}`));
+    child.on('error', (error) =>
+      log(`[daily-news-agent] could not auto-open browser (${cmd}): ${error instanceof Error ? error.message : String(error)}`),
+    );
+  } catch (error) {
+    log(`[daily-news-agent] could not auto-open browser (${cmd}): ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export async function findMostRecentSelectPid(repoRoot) {
+  // After publish the draft is cleared, so cleanup locates the latest output/*-select.pid by date.
+  const dir = join(repoRoot, 'output');
+  if (!existsSync(dir)) return null;
+  const entries = await readdir(dir);
+  const matches = entries
+    .map((name) => name.match(/^(\d{4}-\d{2}-\d{2})-select\.pid$/))
+    .filter(Boolean)
+    .sort((a, b) => a[1].localeCompare(b[1]));
+  if (matches.length === 0) return null;
+  const latest = matches[matches.length - 1];
+  return { date: latest[1], path: join(dir, `${latest[1]}-select.pid`) };
+}
+
 async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
   const draft = await readDraftOrFail(pipeline);
   const date = formatDateFromUnixSeconds(draft.collectedAt);
@@ -871,6 +978,7 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
       log(`SELECT_HTML=${htmlPath}`);
       log(`SELECTION_FILE=${selectionPath}`);
       log('STATUS=waiting — open the URL, choose 6-10 items, then click 确认发布.');
+      openInBrowser(`${origin}/`, log);
     });
 
     const shutdown = (signal) => {
@@ -885,6 +993,126 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
   // Reached only when a confirm was short-circuited in tests, or in the reuse path (another select
   // server was already running on this port and will write the file on confirm).
   return `daily-news select: waiting for confirm; selection will be written to ${selectionPath}`;
+}
+
+async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env }) {
+  const draft = await readDraftOrFail(pipeline);
+  const date = formatDateFromUnixSeconds(draft.collectedAt);
+  const curationPath = artifactPath(repoRoot, date, 'curation.json');
+  const selectionPath = artifactPath(repoRoot, date, 'selection.json');
+  const htmlPath = artifactPath(repoRoot, date, 'select.html');
+  const pidPath = artifactPath(repoRoot, date, 'select.pid');
+  const logPath = artifactPath(repoRoot, date, 'select.log');
+  const port = resolveSelectPort(env);
+  const origin = `http://127.0.0.1:${port}`;
+
+  if (!existsSync(curationPath)) {
+    throw new Error(`Missing ${curationPath}. Run \`curate-apply\` first.`);
+  }
+  if (existsSync(selectionPath) && !args.force) {
+    return [
+      'daily-news select-start: selection already exists',
+      `Selection: ${selectionPath}`,
+      'Re-run with --force to discard it and choose again.',
+      'Next action: run `publish` (then `select-stop` if a server is still running).',
+    ].join('\n');
+  }
+
+  // Reuse an already-running select server (no fresh bind -> open the browser here).
+  if (await probeHealth(port)) {
+    openInBrowser(`${origin}/`, log);
+    return [
+      'daily-news select-start: a select server is already running (reused).',
+      `SELECT_URL=${origin}/`,
+      `SELECTION_FILE=${selectionPath}`,
+      'Choose 6-10 items and click 确认发布, then tell the agent to publish. The agent is NOT blocking.',
+    ].join('\n');
+  }
+
+  // Port held by something that isn't our select server -> fail loud instead of hanging on health.
+  if (await isPortTaken(port)) {
+    throw new Error(
+      `Port ${port} is in use by a non-select process. Free it or set DAILY_NEWS_SELECT_PORT.`,
+    );
+  }
+
+  const selectArgs = ['select'];
+  if (args.force) selectArgs.push('--force');
+  const tsxPath = loadTsxPath(repoRoot);
+  const runtimePath = fileURLToPath(import.meta.url);
+  await mkdir(dirname(logPath), { recursive: true });
+  const logFd = openSync(logPath, 'w');
+  // detached:true puts the child in a new session (it survives the agent's turn ending and any
+  // SIGTERM to the agent's own process group); unref() lets this parent exit without waiting.
+  const child = spawn(
+    process.execPath,
+    ['--import', tsxPath, runtimePath, ...selectArgs],
+    { cwd: repoRoot, env: { ...env, DAILY_NEWS_REPO: repoRoot }, detached: true, stdio: ['ignore', logFd, logFd] },
+  );
+  child.unref();
+  await writeFile(pidPath, String(child.pid));
+
+  // The detached server opens the browser itself on listen; here we just wait for it to bind.
+  const ready = await waitForSelectHealth(port, 20000);
+  if (!ready) {
+    await stopPid(child.pid).catch(() => {});
+    await rm(pidPath, { force: true });
+    throw new Error(`select server did not become healthy on port ${port}; see ${logPath}`);
+  }
+
+  return [
+    'daily-news select-start: detached select server launched (browser opens automatically).',
+    `SELECT_URL=${origin}/`,
+    `SELECT_HTML=${htmlPath}`,
+    `SELECTION_FILE=${selectionPath}`,
+    `SERVER_PID_FILE=${pidPath}`,
+    `SERVER_LOG=${logPath}`,
+    'The agent is NOT blocking. Tell the user to choose 6-10 items and click 确认发布, then to tell',
+    'you to publish. After publish, run `select-stop` to clean up the detached server.',
+  ].join('\n');
+}
+
+async function runSelectStop({ pipeline, repoRoot, log }) {
+  let pidPath = null;
+  // Prefer the current draft's pidfile; fall back to the most recent output/*-select.pid, because
+  // the draft is cleared after publish and cleanup typically runs in that state.
+  try {
+    const draft = await pipeline.draftModule.readPendingDraft();
+    if (draft) {
+      pidPath = artifactPath(repoRoot, formatDateFromUnixSeconds(draft.collectedAt), 'select.pid');
+    }
+  } catch {
+    // ignore — fall through to the scan
+  }
+  if (!pidPath || !existsSync(pidPath)) {
+    const found = await findMostRecentSelectPid(repoRoot);
+    if (!found) {
+      return 'daily-news select-stop: no output/*-select.pid found; nothing to stop.';
+    }
+    pidPath = found.path;
+  }
+
+  let pid = NaN;
+  try {
+    pid = parseInt((await readFile(pidPath, 'utf-8')).trim(), 10);
+  } catch {
+    pid = NaN;
+  }
+  let outcome;
+  if (Number.isFinite(pid) && pid > 0) {
+    try {
+      const stopped = await stopPid(pid);
+      outcome = stopped
+        ? `stopped detached select server (pid ${pid})`
+        : `server pid ${pid} was already gone`;
+    } catch (error) {
+      outcome = `error stopping pid ${pid}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  } else {
+    outcome = `no valid pid in ${pidPath}`;
+  }
+  await rm(pidPath, { force: true });
+  return ['daily-news select-stop: ' + outcome, `removed ${pidPath}`].join('\n');
 }
 
 export async function runPublish({ pipeline, repoRoot, log }) {
@@ -985,6 +1213,10 @@ export async function runAgent({
       return runCurateApply({ pipeline, repoRoot, log });
     case 'select':
       return runSelect({ pipeline, repoRoot, args, log, env });
+    case 'select-start':
+      return runSelectStart({ pipeline, repoRoot, args, log, env });
+    case 'select-stop':
+      return runSelectStop({ pipeline, repoRoot, log });
     case 'publish':
       return runPublish({ pipeline, repoRoot, log });
     default:
