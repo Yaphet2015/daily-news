@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { publish, writeSelectionReport } from '../src/publish.js';
 import type { CurationDiagnostics, SelectionReport } from '../src/types.js';
 
-test('publish saves Obsidian markdown under a YYYY-MM monthly folder', async () => {
+test('publish saves Obsidian markdown under clippings/daily-news and a YYYY-MM monthly folder', async () => {
   const vaultDir = await mkdtemp(join(tmpdir(), 'daily-news-vault-'));
   const originalVaultPath = process.env.OBSIDIAN_VAULT_PATH;
   process.env.OBSIDIAN_VAULT_PATH = vaultDir;
@@ -18,7 +18,13 @@ test('publish saves Obsidian markdown under a YYYY-MM monthly folder', async () 
       substack: '<p>x</p>',
     });
 
-    const filepath = join(vaultDir, '2026-04', '2026-04-30-daily-news.md');
+    const filepath = join(
+      vaultDir,
+      'clippings',
+      'daily-news',
+      '2026-04',
+      '2026-04-30-daily-news.md',
+    );
     assert.equal(await readFile(filepath, 'utf-8'), '# note');
   } finally {
     if (originalVaultPath === undefined) {

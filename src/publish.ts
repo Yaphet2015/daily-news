@@ -8,7 +8,7 @@ const OUTPUT_DIR = join(__dirname, '..', 'output');
 
 function getObsidianFilePath(vaultPath: string, date: string): string {
   const monthFolder = date.slice(0, 7);
-  return join(vaultPath, monthFolder, `${date}-daily-news.md`);
+  return join(vaultPath, 'clippings', 'daily-news', monthFolder, `${date}-daily-news.md`);
 }
 
 async function saveObsidian(content: string, date: string): Promise<string> {
