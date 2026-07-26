@@ -120,6 +120,12 @@ items with links/screenshots/charts/demos, and respected/official sources; treat
 as a deterministic first-pass hint, not a verdict. Filter out pure emotion/jokes, ads/promotions/recruiting,
 reposts with no added commentary, duplicates (keep only the most informative), and engagement-farming.
 
+**Recommendation feed (`twitterFeed: 'for-you'`):** these are X's algorithmic recommendations for a fresh account
+— far noisier than the curated `list`. The collect stage no longer AI-pre-filters them (no external API in this
+skill), so **you** apply the AI-relevance bar during curation: keep only AI models/products, agents, AI dev tooling,
+ML research, AI infra, benchmarks, AI-industry moves; drop general tech, generic productivity, mobile apps, jokes,
+hiring, and engagement-farming even if high-engagement. Hold `for-you` items to a stricter bar than `list` items.
+
 **Categories:** `Product` = launches, feature updates, tooling, company moves, research that changes what people
 can use/buy now · `Tutorial` = how-to, workflows, implementation guidance, teardown explainers ·
 `Opinions/Thoughts` = analysis, essays, strategic takes, market interpretation.

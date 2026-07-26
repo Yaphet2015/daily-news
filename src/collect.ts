@@ -1621,12 +1621,26 @@ async function runRecommendationTopicGate(candidates: RecommendationTopicGateCan
   return parseRecommendationTopicGateResponse(raw, new Set(candidates.map((item) => item.id)));
 }
 
+function isRecommendationTopicGateConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.OPENAI_API_KEY) || Boolean(env.AI_BASE_URL && env.AI_API_KEY);
+}
+
 export async function filterAiRelatedRecommendationItems(
   items: CollectedItem[],
   topicGate: RecommendationTopicGate = runRecommendationTopicGate,
   warn: (message: string) => void = console.warn,
 ): Promise<SourceCollectionResult> {
   if (items.length === 0) return { items: [] };
+
+  // Skill / agent 路径刻意不配置外部 AI 接口（策展由 agent 完成）。此时默认的 LLM 预筛门不可用：
+  // 与其 fail-closed 把整批推荐流清零，不如直接放行，把 AI 相关性判断交还给策展阶段的 agent（fail-open）。
+  // 仅对默认门生效；显式注入的自定义门（如测试）照常执行。
+  if (topicGate === runRecommendationTopicGate && !isRecommendationTopicGateConfigured()) {
+    const warning = '未配置 AI 接口，已跳过推荐流 AI 预筛，相关性判断交由策展阶段';
+    warn(`[collect] ${warning}`);
+    return { items, warnings: [warning] };
+  }
+
   const candidates = buildRecommendationTopicGateCandidates(items);
 
   try {

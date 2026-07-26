@@ -865,6 +865,63 @@ test('filterAiRelatedRecommendationItems sends only 500-character previews and k
   assert.deepEqual(seen.map((item) => item.id), ['ai-1', 'non-ai-1']);
 });
 
+test('filterAiRelatedRecommendationItems keeps ALL recommendations when no AI API is configured (skill/agent path, fail-open)', async () => {
+  // 意图：skill 路径刻意不配外部 AI 接口（策展由 agent 完成）。默认 LLM 预筛门此时不可用，
+  // 必须 fail-open 放行全部推荐流、把相关性判断交还策展阶段，而不是清零。若回归成“调门 → 抛 AI 配置缺失 → 清零”，
+  // 下方“全部保留”断言会失败。
+  const filterAiRelatedRecommendationItems = (collectModule as Record<string, Function>)
+    .filterAiRelatedRecommendationItems;
+  const savedOpenAI = process.env.OPENAI_API_KEY;
+  const savedBaseUrl = process.env.AI_BASE_URL;
+  const savedApiKey = process.env.AI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.AI_BASE_URL;
+  delete process.env.AI_API_KEY;
+
+  const warnings: string[] = [];
+  try {
+    const result = await filterAiRelatedRecommendationItems(
+      [
+        {
+          id: 'rec-noai-1',
+          source: 'twitter',
+          twitterFeed: 'for-you',
+          text: 'Some off-topic algorithmic recommendation.',
+          publishedAt: '2026-03-15T09:00:00Z',
+          url: 'https://x.com/alice/status/1',
+          author: { name: 'Alice', username: 'alice' },
+          media: [],
+        },
+        {
+          id: 'rec-noai-2',
+          source: 'twitter',
+          twitterFeed: 'for-you',
+          text: 'Another noisy for-you tweet.',
+          publishedAt: '2026-03-15T09:01:00Z',
+          url: 'https://x.com/bob/status/2',
+          author: { name: 'Bob', username: 'bob' },
+          media: [],
+        },
+      ],
+      undefined, // 触发默认门 runRecommendationTopicGate
+      (message: string) => warnings.push(message),
+    );
+
+    assert.deepEqual(
+      result.items.map((item: { id: string }) => item.id),
+      ['rec-noai-1', 'rec-noai-2'],
+    );
+    assert.ok(warnings.some((w) => /跳过推荐流 AI 预筛/.test(w)));
+  } finally {
+    if (savedOpenAI === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = savedOpenAI;
+    if (savedBaseUrl === undefined) delete process.env.AI_BASE_URL;
+    else process.env.AI_BASE_URL = savedBaseUrl;
+    if (savedApiKey === undefined) delete process.env.AI_API_KEY;
+    else process.env.AI_API_KEY = savedApiKey;
+  }
+});
+
 test('buildRecommendationTopicGatePrompt includes confirmed preference hints without expanding previews', () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).buildRecommendationTopicGatePrompt, 'function');
 
