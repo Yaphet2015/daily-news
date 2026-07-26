@@ -30,3 +30,6 @@ dist/
 
 # Local worktrees
 .worktrees/
+
+# pi-subagents runtime scratch
+.pi-subagents/
