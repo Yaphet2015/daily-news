@@ -74,10 +74,12 @@ Run `collect`. If a draft already exists, the command prints `PENDING_DRAFT_EXIS
 exits **without flags**. Ask the user: resume the existing draft or discard and re-collect, then re-run with
 `--resume` or `--discard`. (Mirrors the interactive resume/discard/cancel choice in `npm run generate`.)
 
-**Sources:** `collect` reads `ENABLED_SOURCES`, which **defaults to `twitter` only**. To also collect Substack,
-set `ENABLED_SOURCES=twitter,substack` plus the required Substack env (`SUBSTACK_PUBLICATION_URL`, etc.) in `.env`
-— so a Twitter-only run is by design, not a bug. Transient Twitter `429`/timeout aborts that leave no draft are
-safe to retry: just re-run `collect` (idempotent until a draft is written).
+**Sources:** `collect` reads `ENABLED_SOURCES`, which **defaults to `twitter,aihot`**. AI HOT pulls the
+item-level `feed.xml` (50 curated items, no API key) and attributes each item to its **original source**
+(the feed's "阅读原文" link + `<author>` label), so it enters the unified pool without surfacing the AI HOT
+site. To also collect Substack, set `ENABLED_SOURCES=twitter,substack,aihot` plus the required Substack env
+(`SUBSTACK_PUBLICATION_URL`, etc.) in `.env`. To disable AI HOT, set `ENABLED_SOURCES=twitter`. A Twitter-only
+run is therefore opt-out (set `ENABLED_SOURCES=twitter`), not the default.
 
 ### 2. curate-input (deterministic)
 Run `curate-input`. It ranks the draft (no LLM — `readerBrief` is only a ranking bonus and is skipped here),

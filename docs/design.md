@@ -5,7 +5,7 @@
 
 说下怎么实现的。
 
-1）收集来源。当前包括一个 twitter list、一个使用独立新账号的 X For You 推荐流，再加上我 Substack 账号 follow 的 publications；后面有需要再增补新的列表或 Blog RSS 地址
+1）收集来源。当前包括一个 twitter list、一个使用独立新账号的 X For You 推荐流、我 Substack 账号 follow 的 publications，以及 AI HOT 的条目级精选 RSS（`feed.xml`，作为补充信源默认开启）；后面有需要再增补新的列表或 Blog RSS 地址。AI HOT 条目仅作为候选来源参与统一打分与筛选，发布产物的来源、描述一律按其**原始来源**（解析自 feed 的「阅读原文」链接与 `<author>` 标签），不出现 AI HOT 站点本身。
 
  [https://x.com/i/lists/2043983199311913431](https://x.com/i/lists/2043983199311913431)
 
