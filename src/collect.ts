@@ -734,6 +734,33 @@ function stripHtml(value: string): string {
   return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+const AIHOT_ORIGINAL_LINK_RE = /<a\b[^>]*\bhref="([^"]+)"[^>]*>\s*阅读原文\s*<\/a>/i;
+
+export function extractAihotOriginalUrl(descriptionHtml: string): string | null {
+  const match = descriptionHtml.match(AIHOT_ORIGINAL_LINK_RE);
+  return match?.[1] ? match[1].trim() : null;
+}
+
+export function stripAihotSummaryText(descriptionHtml: string): string {
+  const blocks = Array.from(
+    descriptionHtml.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi),
+  ).map((match) => match[1] ?? '');
+  const kept = blocks.filter((block) => !/阅读原文|via\s+AI\s+HOT/i.test(block));
+  return stripHtml(kept.join(' ')).trim();
+}
+
+export function parseAihotAuthorLabel(authorField: string): { name: string; username?: string } {
+  const parenthesized = authorField.match(/^[^()]*\(([\s\S]*)\)\s*$/);
+  let label = (parenthesized?.[1] ?? authorField).trim();
+  label = label.replace(/\s*[（(]\s*RSS\s*[)）]\s*$/i, '').trim();
+
+  const handleMatch = label.match(/@([A-Za-z0-9_]+)/);
+  const username = handleMatch?.[1];
+  const name = label.replace(/\s*[（(]@[A-Za-z0-9_]+[)）]\s*$/, '').trim() || label;
+
+  return username ? { name, username } : { name };
+}
+
 function resolveSubstackBody(post: SubstackPostLike): string {
   if (typeof post.body === 'string' && post.body.trim().length > 0) return post.body.trim();
   if (typeof post.markdown === 'string' && post.markdown.trim().length > 0) return post.markdown.trim();

@@ -2524,3 +2524,40 @@ test('resolveTwitterPrimarySource does not use reply source from a different aut
   assert.equal(resolved.url, 'https://x.com/chenchengpro/status/tw-diff-author-reply');
   assert.equal(resolved.linkedSource, undefined);
 });
+
+test('extractAihotOriginalUrl pulls the 阅读原文 href from AI HOT description HTML', () => {
+  const html =
+    '<p>摘要正文</p>' +
+    '<p>🔗 <a href="https://openrouter.ai/blog/x">阅读原文</a></p>' +
+    '<p>via AI HOT · <a href="https://aihot.virxact.com/items/abc">abc</a></p>';
+  assert.equal(collectModule.extractAihotOriginalUrl(html), 'https://openrouter.ai/blog/x');
+  assert.equal(collectModule.extractAihotOriginalUrl('<p>无链接</p>'), null);
+});
+
+test('stripAihotSummaryText drops 阅读原文 and via AI HOT footer lines', () => {
+  const html =
+    '<p>OpenRouter 发布了 langchain-openrouter 专用包，调用 400+ 模型。</p>' +
+    '<p>🔗 <a href="https://openrouter.ai/blog/x">阅读原文</a></p>' +
+    '<p>via AI HOT · <a href="https://aihot.virxact.com/items/abc">abc</a></p>';
+  const text = collectModule.stripAihotSummaryText(html);
+  assert.ok(text.includes('langchain-openrouter'));
+  assert.ok(!/阅读原文/.test(text));
+  assert.ok(!/via\s+AI\s+HOT/i.test(text));
+  assert.ok(!/aihot\.virxact\.com/.test(text));
+});
+
+test('parseAihotAuthorLabel extracts original source label and optional X handle', () => {
+  assert.deepEqual(
+    collectModule.parseAihotAuthorLabel('noreply@aihot.virxact.com (IT之家（RSS）)'),
+    { name: 'IT之家' },
+  );
+  assert.deepEqual(
+    collectModule.parseAihotAuthorLabel('noreply@aihot.virxact.com (X：Tibo (@thsottiaux))'),
+    { name: 'X：Tibo', username: 'thsottiaux' },
+  );
+  assert.deepEqual(
+    collectModule.parseAihotAuthorLabel('noreply@aihot.virxact.com (OpenRouter：Announcements（RSS）)'),
+    { name: 'OpenRouter：Announcements' },
+  );
+  assert.deepEqual(collectModule.parseAihotAuthorLabel('AI HOT'), { name: 'AI HOT' });
+});
