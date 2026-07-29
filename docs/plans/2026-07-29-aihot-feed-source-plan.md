@@ -258,7 +258,7 @@ git commit -m "feat(collect): AI HOT RSS 解析器; extractXmlTag 容忍标签�
 
 **Files:**
 - Modify: `src/types.ts`、`src/state.ts`、`src/generate.ts`、`src/draft.ts`、`src/collect.ts`
-- Test: `tests/collect.test.ts`（新增 collector 测试）、`tests/state.test.ts`（更新既有期望）
+- Test: `tests/collect.test.ts`（新增 collector 测试）、`tests/state.test.ts`（更新既有期望）、`tests/generate.test.ts`（既有 inline `readState` 的 `RunState` 字面量补 aihot，见 Step 8）
 
 **Interfaces:**
 - Consumes: Task 1 的 `extractAihotOriginalUrl`/`stripAihotSummaryText`/`parseAihotAuthorLabel`、Task 2 的 `AihotRawItem`/`parseAihotFeed`；既有 `normalizeTwitterStatusUrl`、`normalizeExternalUrl`、`isTwitterDomain`、`filterSinceTime`、`sortNewestFirst`、`buildSubstackCurlArgs`、`resolveHttpProxy`、`logCollectDiagnostic`、`redactProxyValue`、`redactCurlArgs`、`summarizeError`、`summarizeDiagnosticError`、`execFileAsync`、`parsePositiveInt`、`stripHtml`、`CollectedItem`。
@@ -617,6 +617,8 @@ function parseEnabledSources(): SourceName[] {
 
 （`writeState` 测试用 `assert.match` 正则断言，新增 aihot 不影响其通过，无需改动。）
 
+`tests/generate.test.ts` 内约 18 处 inline `readState` mock 字面量按 `RunState` 结构类型校验，加 aihot 后缺键会让 `tsc --noEmit` 失败：给每处 `{ sources: { twitter: {...}, substack: {...} } }` 补上 `aihot: { lastPublishedTime: 0 }`（不改任何断言/运行行为）。用 `npx tsc --noEmit` 验证 exit 0。
+
 - [ ] **Step 9: 跑全量测试确认通过**
 
 Run: `npm test`
@@ -625,7 +627,7 @@ Expected: 全绿（含新增 2 个 collector 测试、Task 1/2 测试、更新�
 - [ ] **Step 10: 提交**
 
 ```bash
-git add src/types.ts src/state.ts src/generate.ts src/draft.ts src/collect.ts tests/collect.test.ts tests/state.test.ts
+git add src/types.ts src/state.ts src/generate.ts src/draft.ts src/collect.ts tests/collect.test.ts tests/state.test.ts tests/generate.test.ts
 git commit -m "feat(collect): 接入 aihot 源(默认开启,原始来源归属)"
 ```
 
