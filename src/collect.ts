@@ -761,6 +761,36 @@ export function parseAihotAuthorLabel(authorField: string): { name: string; user
   return username ? { name, username } : { name };
 }
 
+export interface AihotRawItem {
+  guid: string;
+  title: string;
+  descriptionHtml: string;
+  publishedAt: string;
+  authorField: string;
+}
+
+export function parseAihotFeed(xml: string): AihotRawItem[] {
+  const channelMatch = xml.match(/<channel>([\s\S]*?)<\/channel>/i);
+  if (!channelMatch?.[1]) return [];
+
+  const channel = channelMatch[1];
+  return Array.from(channel.matchAll(/<item>([\s\S]*?)<\/item>/gi)).flatMap((match) => {
+    const block = match[1] ?? '';
+    const guid = cleanXmlText(extractXmlTag(block, 'guid'));
+    const title = cleanXmlText(extractXmlTag(block, 'title'));
+    if (!guid || !title) return [];
+    return [
+      {
+        guid,
+        title,
+        descriptionHtml: cleanXmlText(extractXmlTag(block, 'description')),
+        publishedAt: cleanXmlText(extractXmlTag(block, 'pubDate')),
+        authorField: cleanXmlText(extractXmlTag(block, 'author')),
+      },
+    ];
+  });
+}
+
 function resolveSubstackBody(post: SubstackPostLike): string {
   if (typeof post.body === 'string' && post.body.trim().length > 0) return post.body.trim();
   if (typeof post.markdown === 'string' && post.markdown.trim().length > 0) return post.markdown.trim();
@@ -822,7 +852,7 @@ function cleanXmlText(value: string | undefined): string {
 
 function extractXmlTag(block: string, tagName: string): string | undefined {
   const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = block.match(new RegExp(`<${escapedTag}>([\\s\\S]*?)</${escapedTag}>`, 'i'));
+  const match = block.match(new RegExp(`<${escapedTag}\\b[^>]*>([\\s\\S]*?)</${escapedTag}>`, 'i'));
   return match?.[1];
 }
 

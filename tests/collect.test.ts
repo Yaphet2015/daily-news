@@ -2561,3 +2561,38 @@ test('parseAihotAuthorLabel extracts original source label and optional X handle
   );
   assert.deepEqual(collectModule.parseAihotAuthorLabel('AI HOT'), { name: 'AI HOT' });
 });
+
+test('parseAihotFeed extracts item guid/title/description/pubDate/author from RSS', () => {
+  const xml = String.raw`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>AI HOT — 精选</title>
+<link>https://aihot.virxact.com/</link>
+<item>
+<title><![CDATA[OpenRouter 推出专用 LangChain 集成包]]></title>
+<link>https://aihot.virxact.com/items/cms5dje23</link>
+<description><![CDATA[<p>OpenRouter 发布了专用包。</p><p>🔗 <a href="https://openrouter.ai/blog/x">阅读原文</a></p><p>via AI HOT · <a href="https://aihot.virxact.com/items/cms5dje23">x</a></p>]]></description>
+<category>技巧观点</category>
+<pubDate>Wed, 29 Jul 2026 00:00:00 GMT</pubDate>
+<guid isPermaLink="false">cms5dje23</guid>
+<author>noreply@aihot.virxact.com (OpenRouter：Announcements（RSS）)</author>
+</item>
+<item>
+<title><![CDATA[无 guid 的条目应被跳过]]></title>
+<link>https://aihot.virxact.com/items/skip</link>
+<description><![CDATA[<p>x</p>]]></description>
+<pubDate>Wed, 29 Jul 2026 00:00:00 GMT</pubDate>
+<author>noreply@aihot.virxact.com (AI HOT)</author>
+</item>
+</channel></rss>`;
+
+  assert.deepEqual(collectModule.parseAihotFeed(xml), [
+    {
+      guid: 'cms5dje23',
+      title: 'OpenRouter 推出专用 LangChain 集成包',
+      descriptionHtml:
+        '<p>OpenRouter 发布了专用包。</p><p>🔗 <a href="https://openrouter.ai/blog/x">阅读原文</a></p><p>via AI HOT · <a href="https://aihot.virxact.com/items/cms5dje23">x</a></p>',
+      publishedAt: 'Wed, 29 Jul 2026 00:00:00 GMT',
+      authorField: 'noreply@aihot.virxact.com (OpenRouter：Announcements（RSS）)',
+    },
+  ]);
+});
