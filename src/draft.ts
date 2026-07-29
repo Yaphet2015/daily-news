@@ -10,7 +10,9 @@ const DRAFT_PATH = join(__dirname, '..', 'data', 'pending-draft.json');
 function normalizeEnabledSources(value: unknown): SourceName[] | null {
   if (!Array.isArray(value)) return null;
 
-  const sources = value.filter((entry): entry is SourceName => entry === 'twitter' || entry === 'substack');
+  const sources = value.filter(
+    (entry): entry is SourceName => entry === 'twitter' || entry === 'substack' || entry === 'aihot',
+  );
   return sources.length === value.length ? Array.from(new Set(sources)) : null;
 }
 

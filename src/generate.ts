@@ -100,11 +100,12 @@ function advancePublishedState(state: RunState, sources: string[], collectedAt: 
     sources: {
       twitter: { lastPublishedTime: state.sources.twitter.lastPublishedTime },
       substack: { lastPublishedTime: state.sources.substack.lastPublishedTime },
+      aihot: { lastPublishedTime: state.sources.aihot.lastPublishedTime },
     },
   };
 
   for (const source of sources) {
-    if (source === 'twitter' || source === 'substack') {
+    if (source === 'twitter' || source === 'substack' || source === 'aihot') {
       nextState.sources[source] = { lastPublishedTime: collectedAt };
     }
   }
@@ -117,6 +118,7 @@ function createAppendCollectionState(draft: PendingDraft): RunState {
     sources: {
       twitter: { lastPublishedTime: draft.collectedAt },
       substack: { lastPublishedTime: draft.collectedAt },
+      aihot: { lastPublishedTime: draft.collectedAt },
     },
   };
 }

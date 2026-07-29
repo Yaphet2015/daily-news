@@ -35,6 +35,8 @@ const DEFAULT_TWITTER_LIST_ID = '2043983199311913431';
 const DEFAULT_LOOKBACK_SECONDS = 24 * 60 * 60;
 const DEFAULT_SUBSTACK_MAX_POSTS = 40;
 const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
+const DEFAULT_AIHOT_FEED_URL = 'https://aihot.virxact.com/feed.xml';
+const DEFAULT_AIHOT_MAX_ITEMS = 50;
 const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
 const DEFAULT_TWITTER_RECOMMENDATION_BATCH_SIZE = 50;
 const DEFAULT_TWITTER_RECOMMENDATION_BATCH_COUNT = 6;
@@ -789,6 +791,102 @@ export function parseAihotFeed(xml: string): AihotRawItem[] {
       },
     ];
   });
+}
+
+function mapAihotItem(raw: AihotRawItem): CollectedItem | null {
+  const originalUrl = extractAihotOriginalUrl(raw.descriptionHtml);
+  if (!originalUrl) return null;
+
+  let normalized: string | null = null;
+  try {
+    const parsed = new URL(originalUrl);
+    normalized = isTwitterDomain(parsed.hostname)
+      ? (normalizeTwitterStatusUrl(originalUrl) ?? normalizeExternalUrl(originalUrl))
+      : normalizeExternalUrl(originalUrl);
+  } catch {
+    normalized = null;
+  }
+  if (!normalized) return null;
+
+  const { name, username } = parseAihotAuthorLabel(raw.authorField);
+  const parsedDate = Date.parse(raw.publishedAt);
+  const publishedAt = Number.isFinite(parsedDate)
+    ? new Date(parsedDate).toISOString()
+    : raw.publishedAt;
+
+  return {
+    id: raw.guid,
+    source: 'aihot',
+    url: normalized,
+    originUrl: normalized,
+    title: raw.title,
+    text: stripAihotSummaryText(raw.descriptionHtml),
+    author: username ? { name, username } : { name },
+    sourceLabel: name,
+    publishedAt,
+    media: [],
+  };
+}
+
+interface CollectAihotItemsOptions {
+  sinceTime: number;
+  feedUrl?: string;
+  maxItems?: number;
+  deps?: { fetchFeed?: (url: string) => Promise<string> };
+}
+
+export async function collectAihotItems({
+  sinceTime,
+  feedUrl,
+  maxItems = DEFAULT_AIHOT_MAX_ITEMS,
+  deps,
+}: CollectAihotItemsOptions): Promise<CollectedItem[]> {
+  const url = (feedUrl ?? process.env.AIHOT_FEED_URL ?? DEFAULT_AIHOT_FEED_URL).trim();
+  if (!url) return [];
+
+  const fetchFeed = deps?.fetchFeed ?? fetchAihotFeed;
+  console.log(
+    `[collect] 采集 AI HOT feed，sinceTime=${new Date(sinceTime * 1000).toLocaleString('zh-CN')} url=${url}`,
+  );
+
+  let xml: string;
+  try {
+    xml = await fetchFeed(url);
+  } catch (error) {
+    console.warn(`[collect] AI HOT feed 抓取失败: ${summarizeError(error)}`);
+    return [];
+  }
+
+  const rawItems = parseAihotFeed(xml);
+  const mapped: CollectedItem[] = [];
+  let dropped = 0;
+  for (const raw of rawItems) {
+    const item = mapAihotItem(raw);
+    if (item) mapped.push(item);
+    else dropped += 1;
+  }
+
+  const filtered = filterSinceTime(mapped, sinceTime);
+  const result = sortNewestFirst(filtered).slice(0, maxItems);
+  console.log(
+    `[collect] AI HOT 完成，解析 ${rawItems.length} 条，丢弃 ${dropped} 条无原始来源，时间窗内 ${filtered.length} 条，取 ${result.length} 条`,
+  );
+  return result;
+}
+
+async function fetchAihotFeed(url: string): Promise<string> {
+  const proxy = resolveHttpProxy();
+  const args = buildSubstackCurlArgs(url, proxy);
+  logCollectDiagnostic(
+    `aihot proxy=${proxy ? redactProxyValue(proxy) : 'disabled'} command=curl ${redactCurlArgs(args).join(' ')}`,
+  );
+  try {
+    const { stdout } = await execFileAsync('curl', args, { maxBuffer: 20 * 1024 * 1024 });
+    return stdout;
+  } catch (error) {
+    logCollectDiagnostic(`aihot error=${summarizeDiagnosticError(error)}`);
+    throw error;
+  }
 }
 
 function resolveSubstackBody(post: SubstackPostLike): string {
@@ -3090,13 +3188,15 @@ export async function collectSources({
 }
 
 function parseEnabledSources(): SourceName[] {
-  const raw = process.env.ENABLED_SOURCES ?? 'twitter';
+  const raw = process.env.ENABLED_SOURCES ?? 'twitter,aihot';
   const sources = raw
     .split(',')
     .map((value) => value.trim())
-    .filter((value): value is SourceName => value === 'twitter' || value === 'substack');
+    .filter(
+      (value): value is SourceName => value === 'twitter' || value === 'substack' || value === 'aihot',
+    );
 
-  return sources.length > 0 ? Array.from(new Set(sources)) : ['twitter'];
+  return sources.length > 0 ? Array.from(new Set(sources)) : ['twitter', 'aihot'];
 }
 
 export async function diagnoseCollectEnvironment({
@@ -3160,6 +3260,12 @@ export async function collect(
             process.env.SUBSTACK_SOURCE_MAX_POSTS_PER_PUBLICATION,
             DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION,
           ),
+        }),
+      aihot: (sinceTime) =>
+        collectAihotItems({
+          sinceTime,
+          feedUrl: process.env.AIHOT_FEED_URL,
+          maxItems: parsePositiveInt(process.env.AIHOT_SOURCE_MAX_ITEMS, DEFAULT_AIHOT_MAX_ITEMS),
         }),
     },
   });

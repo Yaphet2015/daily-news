@@ -1,4 +1,4 @@
-export type SourceName = 'twitter' | 'substack';
+export type SourceName = 'twitter' | 'substack' | 'aihot';
 export type NewsCategory = 'Product' | 'Tutorial' | 'Opinions/Thoughts';
 export type RoundupMode = 'bullet_links';
 export type CollectedItemKind = 'substack_post' | 'substack_roundup_entry';
@@ -223,6 +223,7 @@ export interface RunState {
   sources: {
     twitter: SourceRunState;
     substack: SourceRunState;
+    aihot: SourceRunState;
   };
 }
 

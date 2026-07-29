@@ -2596,3 +2596,73 @@ test('parseAihotFeed extracts item guid/title/description/pubDate/author from RS
     },
   ]);
 });
+
+test('collectAihotItems maps feed items to CollectedItem with original source attribution', async () => {
+  const xml = String.raw`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>AI HOT — 精选</title><link>https://aihot.virxact.com/</link>
+<item>
+<title><![CDATA[OpenRouter 推出专用 LangChain 集成包]]></title>
+<link>https://aihot.virxact.com/items/cms5dje23</link>
+<description><![CDATA[<p>OpenRouter 发布了 langchain-openrouter 专用包，调用 400+ 模型。</p><p>🔗 <a href="https://openrouter.ai/blog/x?utm_source=feed">阅读原文</a></p><p>via AI HOT · <a href="https://aihot.virxact.com/items/cms5dje23">x</a></p>]]></description>
+<pubDate>Wed, 29 Jul 2026 00:00:00 GMT</pubDate>
+<guid isPermaLink="false">cms5dje23</guid>
+<author>noreply@aihot.virxact.com (OpenRouter：Announcements（RSS）)</author>
+</item>
+<item>
+<title><![CDATA[无阅读原文的条目应被丢弃]]></title>
+<link>https://aihot.virxact.com/items/cms5zz</link>
+<description><![CDATA[<p>这条没有原始链接。</p>]]></description>
+<pubDate>Wed, 29 Jul 2026 01:00:00 GMT</pubDate>
+<guid isPermaLink="false">cms5zz</guid>
+<author>noreply@aihot.virxact.com (AI HOT)</author>
+</item>
+</channel></rss>`;
+
+  const items = await collectModule.collectAihotItems({
+    sinceTime: 0,
+    feedUrl: 'https://example.com/feed.xml',
+    deps: { fetchFeed: async () => xml },
+  });
+
+  assert.equal(items.length, 1);
+  const item = items[0];
+  assert.equal(item.source, 'aihot');
+  assert.equal(item.id, 'cms5dje23');
+  assert.equal(item.url, 'https://openrouter.ai/blog/x');
+  assert.equal(item.originUrl, 'https://openrouter.ai/blog/x');
+  assert.equal(item.title, 'OpenRouter 推出专用 LangChain 集成包');
+  assert.equal(item.author.name, 'OpenRouter：Announcements');
+  assert.equal(item.sourceLabel, 'OpenRouter：Announcements');
+  assert.equal(item.publishedAt, '2026-07-29T00:00:00.000Z');
+  assert.ok(item.text.includes('langchain-openrouter'));
+  assert.ok(!/阅读原文|via\s+AI\s+HOT/i.test(item.text));
+  assert.deepEqual(item.media, []);
+});
+
+test('collectAihotItems respects sinceTime and maxItems', async () => {
+  const item = (guid: string, pub: string) =>
+    `<item><title><![CDATA[t-${guid}]]></title><link>https://aihot.virxact.com/items/${guid}</link>` +
+    `<description><![CDATA[<p>body</p><p>🔗 <a href="https://example.com/${guid}">阅读原文</a></p>]]></description>` +
+    `<pubDate>${pub}</pubDate><guid isPermaLink="false">${guid}</guid><author>noreply@aihot.virxact.com (Example)</author></item>`;
+  const xml =
+    '<rss version="2.0"><channel><title>x</title><link>https://aihot.virxact.com/</link>' +
+    item('a', 'Wed, 29 Jul 2026 00:00:00 GMT') +
+    item('b', 'Wed, 28 Jul 2026 00:00:00 GMT') +
+    item('c', 'Wed, 27 Jul 2026 00:00:00 GMT') +
+    '</channel></rss>';
+
+  const sinceTime = Math.floor(Date.parse('2026-07-28T12:00:00Z') / 1000);
+  const windowed = await collectModule.collectAihotItems({
+    sinceTime,
+    deps: { fetchFeed: async () => xml },
+  });
+  assert.deepEqual(windowed.map((i) => i.id), ['a']);
+
+  const capped = await collectModule.collectAihotItems({
+    sinceTime: 0,
+    maxItems: 2,
+    deps: { fetchFeed: async () => xml },
+  });
+  assert.equal(capped.length, 2);
+  assert.deepEqual(capped.map((i) => i.id), ['a', 'b']);
+});

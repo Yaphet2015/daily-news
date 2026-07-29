@@ -119,6 +119,7 @@ test('runGenerate resumes an existing pending draft without recollecting and cle
       sources: {
         twitter: { lastPublishedTime: 100 },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     }),
     writeState: async (state) => {
@@ -184,6 +185,7 @@ test('runGenerate writes curation diagnostics into the selection report when cur
       sources: {
         twitter: { lastPublishedTime: 100 },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     }),
     writeState: async () => {},
@@ -236,6 +238,7 @@ test('runGenerate logs curation diagnostics when curate returns zero items', asy
       sources: {
         twitter: { lastPublishedTime: 100 },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     }),
     writeState: async () => {},
@@ -274,6 +277,7 @@ test('runGenerate writes collection warnings into the selection report', async (
       sources: {
         twitter: { lastPublishedTime: 100 },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     }),
     writeState: async () => {},
@@ -311,6 +315,7 @@ test('runGenerate records the final select preference event before publish side 
           sources: {
             twitter: { lastPublishedTime: 100 },
             substack: { lastPublishedTime: 0 },
+            aihot: { lastPublishedTime: 0 },
           },
         }),
         writeState: async () => {
@@ -354,6 +359,7 @@ test('runGenerate writes curation diagnostics into review packets when curate re
         sources: {
           twitter: { lastPublishedTime: 100 },
           substack: { lastPublishedTime: 0 },
+          aihot: { lastPublishedTime: 0 },
         },
       }),
       writeState: async () => {},
@@ -395,6 +401,7 @@ test('runGenerate writes collection warnings into review packets', async () => {
         sources: {
           twitter: { lastPublishedTime: 100 },
           substack: { lastPublishedTime: 0 },
+          aihot: { lastPublishedTime: 0 },
         },
       }),
       writeState: async () => {},
@@ -445,6 +452,7 @@ test('runGenerate logs environment diagnostics and exits before normal flow in c
           sources: {
             twitter: { lastPublishedTime: 100 },
             substack: { lastPublishedTime: 0 },
+            aihot: { lastPublishedTime: 0 },
           },
         };
       },
@@ -477,6 +485,7 @@ test('runGenerate writes a fresh pending draft before analysis and preserves it 
           sources: {
             twitter: { lastPublishedTime: 100 },
             substack: { lastPublishedTime: 0 },
+            aihot: { lastPublishedTime: 0 },
           },
         }),
         writeState: async () => {
@@ -523,6 +532,7 @@ test('runGenerate preserves the pending draft when curate fails during main_cura
           sources: {
             twitter: { lastPublishedTime: 100 },
             substack: { lastPublishedTime: 0 },
+            aihot: { lastPublishedTime: 0 },
           },
         }),
         writeState: async () => {
@@ -599,6 +609,7 @@ test('runGenerate preserves the pending draft when curate fails during forced_ro
           sources: {
             twitter: { lastPublishedTime: 100 },
             substack: { lastPublishedTime: 0 },
+            aihot: { lastPublishedTime: 0 },
           },
         }),
         writeState: async () => {
@@ -653,6 +664,7 @@ test('runGenerate discards an old pending draft before collecting a fresh snapsh
       sources: {
         twitter: { lastPublishedTime: 100 },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     }),
     writeState: async (state) => {
@@ -764,6 +776,7 @@ test('runGenerate always passes forced roundup entries into curate even when the
       sources: {
         twitter: { lastPublishedTime: 100 },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     }),
     writeState: async () => {},
@@ -872,6 +885,7 @@ test('runGenerate review mode appends fresh items into an existing pending draft
         sources: {
           twitter: { lastPublishedTime: 100 },
           substack: { lastPublishedTime: 0 },
+          aihot: { lastPublishedTime: 0 },
         },
       }),
       writeState: async () => {
@@ -951,6 +965,7 @@ test('runGenerate review mode reviews an existing draft without rewriting it whe
         sources: {
           twitter: { lastPublishedTime: 100 },
           substack: { lastPublishedTime: 0 },
+          aihot: { lastPublishedTime: 0 },
         },
       }),
       writeState: async () => {
@@ -1017,6 +1032,7 @@ test('runGenerate review mode preserves an existing draft when fresh collection 
             sources: {
               twitter: { lastPublishedTime: 100 },
               substack: { lastPublishedTime: 0 },
+              aihot: { lastPublishedTime: 0 },
             },
           }),
           writeState: async () => {
@@ -1071,6 +1087,7 @@ test('runGenerate review mode writes a fresh pending draft and leaves it for int
         sources: {
           twitter: { lastPublishedTime: 100 },
           substack: { lastPublishedTime: 0 },
+          aihot: { lastPublishedTime: 0 },
         },
       }),
       writeState: async () => {
@@ -1139,6 +1156,7 @@ test('runGenerate review mode preserves draft and state when curation fails', as
             sources: {
               twitter: { lastPublishedTime: 100 },
               substack: { lastPublishedTime: 0 },
+              aihot: { lastPublishedTime: 0 },
             },
           }),
           writeState: async () => {

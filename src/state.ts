@@ -12,6 +12,7 @@ function createEmptyState(): RunState {
     sources: {
       twitter: { lastPublishedTime: 0 },
       substack: { lastPublishedTime: 0 },
+      aihot: { lastPublishedTime: 0 },
     },
   };
 }
@@ -30,6 +31,7 @@ export function normalizeRunState(raw: unknown): RunState {
       sources: {
         twitter: { lastPublishedTime: candidate.lastRunTime },
         substack: { lastPublishedTime: 0 },
+        aihot: { lastPublishedTime: 0 },
       },
     };
   }
@@ -39,7 +41,7 @@ export function normalizeRunState(raw: unknown): RunState {
       ? (candidate.sources as Record<string, unknown>)
       : {};
 
-  const getLastPublishedTime = (source: 'twitter' | 'substack'): number => {
+  const getLastPublishedTime = (source: 'twitter' | 'substack' | 'aihot'): number => {
     const sourceState =
       sources[source] && typeof sources[source] === 'object'
         ? (sources[source] as Record<string, unknown>)
@@ -60,6 +62,7 @@ export function normalizeRunState(raw: unknown): RunState {
     sources: {
       twitter: { lastPublishedTime: getLastPublishedTime('twitter') },
       substack: { lastPublishedTime: getLastPublishedTime('substack') },
+      aihot: { lastPublishedTime: getLastPublishedTime('aihot') },
     },
   };
 }

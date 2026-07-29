@@ -13,6 +13,7 @@ test('normalizeRunState migrates legacy state to per-source cursors', () => {
     sources: {
       twitter: { lastPublishedTime: 123 },
       substack: { lastPublishedTime: 0 },
+      aihot: { lastPublishedTime: 0 },
     },
   });
 });
@@ -27,6 +28,7 @@ test('readState returns the new empty shape when state file is missing', async (
     sources: {
       twitter: { lastPublishedTime: 0 },
       substack: { lastPublishedTime: 0 },
+      aihot: { lastPublishedTime: 0 },
     },
   });
 });
