@@ -676,7 +676,9 @@ item-level `feed.xml` (50 curated items, no API key) and attributes each item to
 (the feed's "阅读原文" link + `<author>` label), so it enters the unified pool without surfacing the AI HOT
 site. To also collect Substack, set `ENABLED_SOURCES=twitter,substack,aihot` plus the required Substack env
 (`SUBSTACK_PUBLICATION_URL`, etc.) in `.env`. To disable AI HOT, set `ENABLED_SOURCES=twitter`. A Twitter-only
-run is therefore opt-out (set `ENABLED_SOURCES=twitter`), not the default.
+run is therefore opt-out (set `ENABLED_SOURCES=twitter`), not the default. Transient Twitter
+`429`/timeout aborts that leave no draft are safe to retry: just re-run `collect` (idempotent until a draft
+is written). （原「Sources:」段落末尾的 Twitter 重试幂等性一句，替换时必须保留。）
 ```
 
 - [ ] **Step 4: 验证文档一致 + 测试仍绿**
