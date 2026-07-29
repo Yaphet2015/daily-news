@@ -197,6 +197,15 @@ Expected: FAIL（`collectModule.parseAihotFeed is not a function`）。
 
 - [ ] **Step 3: 实现 parser**
 
+先修共享 helper `extractXmlTag` 以容忍标签属性（real feed 的 `<guid isPermaLink="false">` 带属性；对无属性标签 `[^>]*` 匹配零字符，`parseSubstackFeed` 行为不变）：
+
+```ts
+// extractXmlTag 内：把
+const match = block.match(new RegExp(`<${escapedTag}>([\\s\\S]*?)</${escapedTag}>`, 'i'));
+// 改为
+const match = block.match(new RegExp(`<${escapedTag}\\b[^>]*>([\\s\\S]*?)</${escapedTag}>`, 'i'));
+```
+
 在 `src/collect.ts` Task 1 新增 helpers 之后追加：
 
 ```ts
@@ -240,7 +249,7 @@ Expected: PASS。
 
 ```bash
 git add src/collect.ts tests/collect.test.ts
-git commit -m "feat(collect): AI HOT RSS feed 解析器"
+git commit -m "feat(collect): AI HOT RSS 解析器; extractXmlTag 容忍标签属性"
 ```
 
 ---
