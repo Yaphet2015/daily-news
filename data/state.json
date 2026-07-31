@@ -1,10 +1,13 @@
 {
   "sources": {
     "twitter": {
-      "lastPublishedTime": 1785204119
+      "lastPublishedTime": 1785376994
     },
     "substack": {
       "lastPublishedTime": 1783993694
+    },
+    "aihot": {
+      "lastPublishedTime": 0
     }
   }
 }
