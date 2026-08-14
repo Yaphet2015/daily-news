@@ -1492,6 +1492,139 @@ test('resolveTwitterPrimarySource prefers quoted X article sources over reply lo
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
 });
 
+test('mapTwitterCliTweet preserves the embedded quoted tweet text for local source resolution', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: 'tw-1',
+    text: 'recommended reading.',
+    author: { id: '1', name: 'Mario', screenName: 'badlogicgames' },
+    createdAt: '2026-08-11T15:58:36Z',
+    quotedTweet: { id: 'q-1', text: 'my new paper on scaling laws https://t.co/abc', author: { name: 'Jonas', screenName: 'jonasgeiping' } },
+  });
+  assert.equal(tweet.quotedStatusUrl, 'https://x.com/jonasgeiping/status/q-1');
+  assert.equal(tweet.quotedTweetText, 'my new paper on scaling laws https://t.co/abc');
+});
+
+test('resolveTwitterPrimarySource resolves the quoted article from embedded quote text without an X API call', async () => {
+  // Regression (Bug B): a quote-wrapper tweet whose own text has no link used to require an extra
+  // `twitter tweet <quoted-id>` call to find the article — an N+1 that triggers X 429s and leaves
+  // the item as no_linked_source. The list payload already carries the quoted tweet's text, so we
+  // resolve the article locally and never hit the X API.
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource({
+    id: 'tw',
+    source: 'twitter',
+    text: 'recommended reading.',
+    publishedAt: '2026-08-11T15:58:36Z',
+    url: 'https://x.com/badlogicgames/status/tw',
+    originUrl: 'https://x.com/badlogicgames/status/tw',
+    author: { name: 'Mario', username: 'badlogicgames' },
+    media: [],
+    outboundLinks: [],
+    quotedStatusUrl: 'https://x.com/jonasgeiping/status/q-1',
+    quotedTweetText: 'my new paper on scaling laws https://t.co/abc',
+  }, {
+    resolveShortUrl: async (url: string) => (url.includes('t.co') ? 'https://arxiv.org/abs/2401.12345' : null),
+    fetchLinkedPage: async () => ({
+      url: 'https://arxiv.org/abs/2401.12345',
+      title: 'Scaling Laws v2',
+      description: 'we study scaling',
+      excerpt: 'we study scaling across...',
+      domain: 'arxiv.org',
+      via: 'quote',
+    }),
+    fetchQuotedPrimarySource: async () => { throw new Error('network quote lookup must not run when embedded text resolves'); },
+    fetchTwitterReplies: async () => { throw new Error('should not fetch replies'); },
+  });
+
+  assert.equal(resolved.url, 'https://arxiv.org/abs/2401.12345');
+  assert.equal(resolved.linkedSource?.url, 'https://arxiv.org/abs/2401.12345');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' });
+});
+
+test('resolveTwitterPrimarySource falls back to the network quote lookup when embedded quote text has no link', async () => {
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  let networkCalled = false;
+  const resolved = await resolveTwitterPrimarySource({
+    id: 'tw',
+    source: 'twitter',
+    text: 'this.',
+    publishedAt: '2026-08-11T15:58:36Z',
+    url: 'https://x.com/badlogicgames/status/tw',
+    originUrl: 'https://x.com/badlogicgames/status/tw',
+    author: { name: 'Mario', username: 'badlogicgames' },
+    media: [],
+    outboundLinks: [],
+    quotedStatusUrl: 'https://x.com/jonasgeiping/status/q-1',
+    quotedTweetText: 'great thread!', // no link in the embedded text
+  }, {
+    resolveShortUrl: async () => null,
+    fetchLinkedPage: async () => null,
+    fetchQuotedPrimarySource: async (url: string) => {
+      networkCalled = true;
+      assert.equal(url, 'https://x.com/jonasgeiping/status/q-1');
+      return { url: 'https://example.com/article', title: 'Article', domain: 'example.com', via: 'quote' };
+    },
+    fetchTwitterReplies: async () => { throw new Error('should not fetch replies'); },
+  });
+
+  assert.ok(networkCalled, 'network quote lookup should run when embedded text has no link');
+  assert.equal(resolved.url, 'https://example.com/article');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
+});
+
+test('resolveTwitterPrimarySource still resolves embedded quote text when the enrichment breaker has tripped', async () => {
+  // The embedded path never touches the X API, so an X rate-limit breaker must NOT block it.
+  const createTwitterEnrichmentCircuitBreaker = (collectModule as Record<string, Function>).createTwitterEnrichmentCircuitBreaker;
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const breaker = createTwitterEnrichmentCircuitBreaker();
+  breaker.recordFailure(new Error('Twitter API error (HTTP 429): Rate limit exceeded'));
+  assert.equal(breaker.shouldSkip(), true);
+
+  const resolved = await resolveTwitterPrimarySource({
+    id: 'tw',
+    source: 'twitter',
+    text: 'recommended reading.',
+    publishedAt: '2026-08-11T15:58:36Z',
+    url: 'https://x.com/badlogicgames/status/tw',
+    originUrl: 'https://x.com/badlogicgames/status/tw',
+    author: { name: 'Mario', username: 'badlogicgames' },
+    media: [],
+    outboundLinks: [],
+    quotedStatusUrl: 'https://x.com/jonasgeiping/status/q-1',
+    quotedTweetText: 'paper https://t.co/abc',
+  }, {
+    enrichmentBreaker: breaker,
+    resolveShortUrl: async () => 'https://arxiv.org/abs/2401.999',
+    fetchLinkedPage: async () => ({ url: 'https://arxiv.org/abs/2401.999', title: 'Paper', domain: 'arxiv.org', via: 'quote' }),
+    fetchQuotedPrimarySource: async () => { throw new Error('breaker should skip network path; embedded path must resolve instead'); },
+    fetchTwitterReplies: async () => { throw new Error('should not fetch replies'); },
+  });
+
+  assert.equal(resolved.url, 'https://arxiv.org/abs/2401.999');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' });
+});
+
+test('buildUnresolvedQuoteWarning reports how many quotes failed to resolve, with samples', () => {
+  const buildUnresolvedQuoteWarning = (collectModule as Record<string, Function>).buildUnresolvedQuoteWarning;
+  const warning = buildUnresolvedQuoteWarning([
+    { quotedStatusUrl: 'https://x.com/a/status/111', sourceResolution: { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' } },
+    { quotedStatusUrl: 'https://x.com/b/status/222', sourceResolution: { decision: 'keep_origin', reason: 'no_linked_source' } },
+    { quotedStatusUrl: 'https://x.com/c/status/333', sourceResolution: { decision: 'keep_origin', reason: 'no_linked_source' } },
+  ]);
+  assert.ok(warning, 'should produce a warning when some quotes are unresolved');
+  assert.match(warning, /3 条带 quote/);
+  assert.match(warning, /1 条经嵌入文本本地解析/);
+  assert.match(warning, /2 条未解析/);
+  assert.match(warning, /x\.com\/c\/status\/333/, 'sample should be a full clickable URL');
+
+  assert.equal(buildUnresolvedQuoteWarning([]), null, 'no quotes -> no warning');
+  assert.equal(
+    buildUnresolvedQuoteWarning([{ quotedStatusUrl: 'https://x.com/a/status/1', sourceResolution: { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' } }]),
+    null,
+    'all resolved -> no warning',
+  );
+});
+
 test('resolveTwitterPrimarySource skips quoted tweet and reply lookups after enrichment breaker trips', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).createTwitterEnrichmentCircuitBreaker, 'function');
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');

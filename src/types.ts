@@ -91,6 +91,9 @@ export interface CollectedItem {
   outboundLinks?: string[];
   embeddedLinkedSource?: LinkedSource;
   quotedStatusUrl?: string;
+  /** Quoted tweet's own text, when the list payload already embedded it. Lets us resolve the
+   * quoted article locally without an extra `twitter tweet <id>` X API call (the N+1 that 429s). */
+  quotedTweetText?: string;
   replyContext?: ReplyContext[];
   linkedSource?: LinkedSource;
   sourceResolution?: SourceResolution;

@@ -218,7 +218,7 @@ output/YYYY-MM-DD-substack.html
 - **发布游标 SSOT**：`data/state.json` 只在本地发布阶段成功结束后才推进，记录每个来源最近一次成功发布到本地产物的采集时间；单纯采集成功不会推进这个游标，避免分析失败后丢稿
 - **自动化审阅模式**：`npm run generate:review` 复用同一条采集、预读、排序和 AI 整理链路，但停止在人工复选前。已有 pending draft 时，它会先从草稿采集时间继续采集 fresh 内容，按条目 ID 和来源 URL 去重合并后再写回同一份草稿；发布游标仍不推进，方便后续交互发布从合并后的采集结果继续
 - **双数据源**：X List 优先使用 `twitter-cli`（可带 cookies / 代理，且能保留更完整的媒体信息），失败时自动切换到 `twitterapi.io`；X For You 推荐流使用 CDP Chrome 中登录的新账号 Cookie，失败时只跳过推荐流
-- **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中
+- **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中。**quote（被引推文）优先用 list payload 已带回的被引推文文本本地解析其外链文章**，避免为每条 quote 再发一次 X 请求（N+1，是 429 的主因）；嵌入文本无链接时才回退到单条抓取，且本地解析不走 X、不受 enrichment 熔断器影响。每次采集会统计 quote 解析情况，未解析的会带原文链接写入 `collectionWarnings` 供人工复核
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，并与仓库内 pinned publications 合并，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
 - **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接；最终发布的 `来源` 使用 bullet 外部链接的锚文本或域名，而不是 Ben's Bites

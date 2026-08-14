@@ -2112,7 +2112,7 @@ async function resolveShortUrlUncached(url: string, retries = 2): Promise<string
 const resolveShortUrl = resolveShortUrlUncached;
 
 async function enrichTwitterTextCandidates(
-  item: CollectedItem,
+  item: Pick<CollectedItem, 'text' | 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>,
   resolveShortUrlImpl: (url: string) => Promise<string | null>,
 ): Promise<Pick<CollectedItem, 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>> {
   const outboundLinks = dedupeUrls(item.outboundLinks ?? []);
@@ -2325,6 +2325,7 @@ interface ResolveTwitterPrimarySourceOptions {
   fetchTwitterReplies?: (item: CollectedItem, maxReplies: number) => Promise<ReplyContext[]>;
   resolveShortUrl?: (url: string) => Promise<string | null>;
   fetchQuotedPrimarySource?: (url: string) => Promise<LinkedSource | null>;
+  resolveEmbeddedQuoteSource?: (quotedTweetText: string) => Promise<LinkedSource | null>;
   enrichmentBreaker?: TwitterEnrichmentCircuitBreaker;
 }
 
@@ -2415,6 +2416,28 @@ async function fetchTwitterTweetViaCli(tweetId: string): Promise<TwitterCliTweet
   const { stdout } = await execTwitterCliCommand(buildTwitterReplyCommand(tweetId, 1, proxy), 10 * 1024 * 1024);
   const payload = parseTwitterCliReplyPayload(JSON.parse(stdout) as TwitterCliReplyPayload);
   return payload[0] ?? null;
+}
+
+/**
+ * Resolve the quoted tweet's primary source from the quote text already embedded in the list
+ * payload — no `twitter tweet <id>` X API call. The X N+1 this avoids is the main cause of the 429s
+ * that left quote-wrapper tweets (e.g. "recommended reading." quoting a paper) as no_linked_source.
+ * Reuses the same t.co-resolution + page-fetch path as the network fallback.
+ */
+async function resolveEmbeddedQuoteSource(
+  quotedTweetText: string,
+  resolveShortUrlImpl: (url: string) => Promise<string | null>,
+  fetchLinkedPageImpl: (url: string) => Promise<LinkedSource | null>,
+): Promise<LinkedSource | null> {
+  const enriched = await enrichTwitterTextCandidates(
+    { text: quotedTweetText, outboundLinks: [], embeddedLinkedSource: undefined, quotedStatusUrl: undefined },
+    resolveShortUrlImpl,
+  );
+  for (const link of enriched.outboundLinks ?? []) {
+    const linkedSource = await fetchLinkedPageImpl(link);
+    if (linkedSource) return { ...linkedSource, via: 'quote' };
+  }
+  return null;
 }
 
 async function fetchQuotedPrimarySource(
@@ -2754,6 +2777,9 @@ export async function resolveTwitterPrimarySource(
   const fetchQuotedPrimarySourceImpl =
     options.fetchQuotedPrimarySource ??
     ((url: string) => fetchQuotedPrimarySource(url, fetchLinkedPageImpl, resolveShortUrlImpl, enrichmentBreaker));
+  const resolveEmbeddedQuoteSourceImpl =
+    options.resolveEmbeddedQuoteSource ??
+    ((quoteText: string) => resolveEmbeddedQuoteSource(quoteText, resolveShortUrlImpl, fetchLinkedPageImpl));
   const enrichedCandidates = await enrichTwitterTextCandidates(item, resolveShortUrlImpl);
   const enrichedItem = {
     ...item,
@@ -2777,6 +2803,23 @@ export async function resolveTwitterPrimarySource(
 
   if (tweetLinks.length === 0 && enrichedItem.embeddedLinkedSource) {
     return useEmbeddedLinkedSource([]);
+  }
+
+  // Prefer the quoted tweet's text already embedded in the list payload. This never touches the
+  // X API (so it is NOT gated by the enrichment breaker — an X 429 elsewhere must not block it),
+  // and it removes the per-quote N+1 that triggered those 429s in the first place.
+  if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl && enrichedItem.quotedTweetText) {
+    const embeddedQuoteSource = await resolveEmbeddedQuoteSourceImpl(enrichedItem.quotedTweetText);
+    if (embeddedQuoteSource) {
+      return {
+        ...enrichedItem,
+        url: embeddedQuoteSource.url,
+        sourceLabel: resolveSourceLabel(embeddedQuoteSource),
+        linkedSource: embeddedQuoteSource,
+        replyContext: [],
+        sourceResolution: { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' },
+      };
+    }
   }
 
   if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl && !enrichmentBreaker?.shouldSkip()) {
@@ -2910,6 +2953,34 @@ export async function resolveTwitterPrimarySources(
   return results;
 }
 
+/**
+ * Summarize quote-wrapper tweets whose primary source could not be resolved (neither from the
+ * embedded quote text nor the network fallback). Surfaced as a collection warning so the residual
+ * is visible — it tells us whether the network fallback needs hardening (caching/rate-limit) and
+ * whether a ranker safety net for unresolved curation-intent quotes is warranted.
+ */
+export function buildUnresolvedQuoteWarning(
+  items: readonly Pick<CollectedItem, 'quotedStatusUrl' | 'sourceResolution'>[],
+): string | null {
+  const quotes = items.filter((it) => it.quotedStatusUrl);
+  if (quotes.length === 0) return null;
+  const unresolved = quotes.filter((it) => it.sourceResolution?.decision !== 'use_linked_source');
+  if (unresolved.length === 0) return null;
+  const embeddedResolved = quotes.filter(
+    (it) => it.sourceResolution?.reason === 'embedded_quote_wrapper',
+  ).length;
+  const samples = unresolved
+    .map((it) => it.quotedStatusUrl!)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join('  ');
+  return (
+    `Twitter quote 解析：共 ${quotes.length} 条带 quote，` +
+    `${embeddedResolved} 条经嵌入文本本地解析，` +
+    `${unresolved.length} 条未解析出主源（嵌入文本无外链或 X 回退被限流/失败）；样本 ${samples}`
+  );
+}
+
 function normalizeSourceCollectionResult(result: CollectedItem[] | SourceCollectionResult): SourceCollectionResult {
   return Array.isArray(result) ? { items: result } : result;
 }
@@ -2985,10 +3056,13 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
         enrichmentBreaker: twitterEnrichmentBreaker,
       }),
   });
+  const quoteWarning = buildUnresolvedQuoteWarning(resolved);
   console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);
   return {
     items: sortNewestFirst(resolved),
-    warnings: recommendationResult.warnings,
+    warnings: quoteWarning
+      ? [...recommendationResult.warnings, quoteWarning]
+      : recommendationResult.warnings,
   };
 }
 
@@ -3005,6 +3079,7 @@ export function mapTwitterCliTweet(tweet: TwitterCliTweet): CollectedItem {
     outboundLinks: extractTwitterCliUrls(tweet),
     embeddedLinkedSource: extractTwitterCliEmbeddedLinkedSource(tweet) ?? buildArticleMetadataLinkedSource(tweet),
     quotedStatusUrl: buildQuotedStatusUrl(tweet),
+    quotedTweetText: tweet.quotedTweet?.text?.trim() || undefined,
     media: Array.isArray(tweet.media)
       ? tweet.media.flatMap((item) => {
           const normalized = normalizeMediaItem(item);
