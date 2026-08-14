@@ -223,10 +223,10 @@ output/YYYY-MM-DD-substack.html
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
 - **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接；最终发布的 `来源` 使用 bullet 外部链接的锚文本或域名，而不是 Ben's Bites
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，`whyItMatters` 可为空字符串，不再因为单篇文章缺少 caveat/signals/why 而整次中断。若 RSS 只暴露订阅墙/预览内容，则保留该条用于审计，但跳过全文 briefing、排序降权，并在候选理由中标记 `订阅墙/预览内容`
-- **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`
+- **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`。**策展指针**：正文很短但带主源外链（或已解析出 `linkedSource`）的 tweet，价值在链接文章而不在自身文字，ranking 会给 substance 设下限、不套用短文本惩罚、也不再用低 substance 把互动钳到辅助信号，并打上 `策展指针` 标签——否则像 "recommended reading. <link>" 这类可信策展短推会被系统性判成 `低质量内容` 沉到候选池之外
 - **推荐流预筛**：X For You scope 更宽，进入 source resolution 和 ranking 前会先用快模型读取每条前 500 字，只保留 AI 模型、AI 产品、agent/devtools、ML research、AI infra、benchmark、AI 行业结构等相关内容
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断。主整理模型返回后还会再次校验：只保留 ID 与 source URL 都可信匹配的条目；若模型返回的是已知原帖 URL 或只差 `utm_*` / `ref` 等追踪参数，会纠正回采集到的 canonical URL，否则按原因丢弃。selection report 会记录丢弃计数、样例和 URL 纠正记录，方便回看低产出是否来自内容不足还是校验丢弃
-- **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池
+- **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池；官号 `@openai` / `@anthropicai` 给 +8 加权，策展型可信作者 `@badlogicgames` 给 +6 加权（权重随可信作者增减手动调整）
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认；每个候选项会显示来源、评分提示和最多 3 行摘要预览，便于人工决策
 - **偏好闭环**：人工 `select` 后会记录全候选的结构化特征、正负选择结果和排序/LLM 选择状态；不记录完整正文、HTML、cookie 或 token。历史统计只生成建议，必须通过 `npm run preferences:review` 人工确认后，才会反哺 X For You 预筛提示和 ranking 加降权

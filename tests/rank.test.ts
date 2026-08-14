@@ -93,6 +93,87 @@ test('engagement helps break ties but does not overcome weak substance', () => {
   assert.match(ranked[1].decisionReasons.join(' '), /互动支持:仅作辅助信号|低质量内容/);
 });
 
+test('rankItems rescues low-substance curation pointer tweets that link a primary source', () => {
+  // Regression (badlogicgames "recommended reading" tweets): a thin pointer tweet whose value
+  // is the linked article was buried as 低质量内容 with its engagement capped to 仅作辅助信号,
+  // so it sank below the 80-item candidate pool and the curator never saw it — even though it
+  // was collected and had real engagement. Engagement on a primary-source pointer is a genuine
+  // signal that the linked content is worth reading, so it must count fully.
+  const now = new Date(Date.now() - 60_000).toISOString();
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'pointer',
+      url: 'https://x.com/badlogicgames/status/1',
+      author: { name: 'Mario', username: 'badlogicgames' },
+      text: 'recommended reading.\n\nhttps://t.co/MBc9Mc1FZk',
+      publishedAt: now,
+      likeCount: 70,
+      replyCount: 7,
+      repostCount: 4,
+      quoteCount: 0,
+    }),
+    makeTwitterItem({
+      id: 'hype-nolink',
+      url: 'https://x.com/bob/status/2',
+      author: { name: 'Bob', username: 'bob' },
+      text: 'This is insane. absolutely wild. wow wow wow.',
+      publishedAt: now,
+      likeCount: 5000,
+      replyCount: 800,
+      repostCount: 700,
+      quoteCount: 400,
+    }),
+  ]);
+
+  const pointer = ranked.find((item) => item.id === 'pointer');
+  const hype = ranked.find((item) => item.id === 'hype-nolink');
+  assert.ok(pointer && hype, 'both items ranked');
+  // The pointer's value is the linked article: it must not be branded low-quality.
+  assert.ok(!pointer!.decisionReasons.includes('低质量内容'),
+    `pointer must not be flagged 低质量内容, got: ${pointer!.decisionReasons.join(',')}`);
+  // Its engagement must count fully, not be capped to auxiliary-only.
+  assert.ok(!pointer!.decisionReasons.includes('互动支持:仅作辅助信号'),
+    `pointer engagement must not be capped, got: ${pointer!.decisionReasons.join(',')}`);
+  assert.ok(pointer!.engagementScore > 8,
+    `pointer engagement should count fully (>>8), got ${pointer!.engagementScore}`);
+  // Tagged for transparency so the curator can see why a short tweet survived.
+  assert.ok(pointer!.decisionReasons.includes('策展指针'));
+  // A high-engagement tweet with NO primary-source link stays suppressed — rescue needs the link.
+  assert.ok(
+    hype!.decisionReasons.includes('低质量内容') || hype!.decisionReasons.includes('互动支持:仅作辅助信号'),
+    `no-link hype should stay suppressed, got: ${hype!.decisionReasons.join(',')}`,
+  );
+  // Real engagement + a real link must outrank engagement-farming without a link.
+  assert.ok(pointer!.priorityScore > hype!.priorityScore,
+    `pointer should outrank no-link hype (${pointer!.priorityScore} vs ${hype!.priorityScore})`);
+});
+
+test('rankItems applies an AUTHOR_RANKING_RULES bonus to badlogicgames', () => {
+  // badlogicgames (Mario Zechner) is a trusted curation source. A small tunable bonus nudges his
+  // posts up, complementing the general pointer rescue. Distinct texts avoid duplicate folding.
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: 'bg',
+      url: 'https://x.com/badlogicgames/status/1',
+      author: { name: 'Mario', username: 'badlogicgames' },
+      text: 'recommended reading. great piece on agents and compilers https://t.co/aaa',
+    }),
+    makeTwitterItem({
+      id: 'other',
+      url: 'https://x.com/other/status/2',
+      author: { name: 'Other', username: 'otherdev' },
+      text: 'recommended reading. nice post about agents and compilers https://t.co/bbb',
+    }),
+  ]);
+
+  const bg = ranked.find((i) => i.id === 'bg');
+  const other = ranked.find((i) => i.id === 'other');
+  assert.ok(bg && other);
+  assert.ok((bg!.scoreBreakdown.sourceSignal) > (other!.scoreBreakdown.sourceSignal),
+    `badlogicgames should receive a sourceSignal bonus`);
+  assert.match(bg!.decisionReasons.join(' '), /作者规则:/);
+});
+
 test('getCandidatePoolSize keeps the final model input bounded', () => {
   assert.equal(getCandidatePoolSize(10), 10);
   assert.equal(getCandidatePoolSize(51), 51);

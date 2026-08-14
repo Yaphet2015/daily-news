@@ -20,4 +20,11 @@ export const AUTHOR_RANKING_RULES: Record<string, AuthorRankingRule> = {
     official: true,
     reason: 'anthropicai官号',
   },
+  // Trusted curation source (Mario Zechner): posts short "recommended reading" pointers to
+  // high-value articles. The general 策展指针 rescue (rank.ts) already keeps these visible; this
+  // small tunable bonus nudges them further. Not `official` — he is a curator, not an org source.
+  badlogicgames: {
+    bonus: 6,
+    reason: 'pi 的原作者，经常写一些 recommend read 的简短推荐推',
+  },
 };

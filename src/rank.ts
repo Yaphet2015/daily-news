@@ -51,6 +51,18 @@ function hasExternalLink(text: string): boolean {
   return /https?:\/\/\S+/i.test(text);
 }
 
+/**
+ * A curation pointer tweet: its own prose is thin, but it points to a primary source (an external
+ * link in the text, or a resolved linkedSource / embeddedLinkedSource). Its value is the linked
+ * article, so the ranker must not punish it for short text. Without recognizing this pattern,
+ * "recommended reading" posts from trusted curators get branded 低质量内容 and buried below the
+ * candidate pool — see rank.test.ts (策展指针).
+ */
+function isPrimarySourcePointer(item: CollectedItem): boolean {
+  const text = normalizeText(item.text);
+  return hasExternalLink(text) || Boolean(item.linkedSource) || Boolean(item.embeddedLinkedSource);
+}
+
 function normalizeAuthorKey(username?: string): string | undefined {
   if (!username) return undefined;
   return username.trim().replace(/^@+/, '').toLowerCase();
@@ -140,14 +152,16 @@ function computeEditorialBreakdown(
   const xArticleBonus = isXArticleSource(item) ? 10 : 0;
   const substackSourceBonus = item.source === 'substack' && !isTeaserOnly ? 10 : 0;
 
-  const substance = clamp(
+  // A curation pointer derives substance from its linked article, not its own prose. Floor it at
+  // 12 so it escapes 低质量内容 and — because computeEngagementScore caps engagement when
+  // substance < 12 — so the pointer's real engagement counts fully.
+  const isPointer = isPrimarySourcePointer(item);
+  const rawSubstance =
     (text.length >= 80 ? 10 : 4) +
-      substanceHits * 4 +
-      linkedSubstanceHits * 3 +
-      (hasBrief ? 8 : 0),
-    0,
-    30,
-  );
+    substanceHits * 4 +
+    linkedSubstanceHits * 3 +
+    (hasBrief ? 8 : 0);
+  const substance = clamp(isPointer ? Math.max(rawSubstance, 12) : rawSubstance, 0, 30);
   const evidence = clamp(
     (hasExternalLink(text) ? 10 : 0) +
       (hasLinkedSource ? 8 : 0) +
@@ -170,7 +184,7 @@ function computeEditorialBreakdown(
   const actionability = clamp(actionabilityHits * 5, 0, 10);
   const penalties = clamp(
     -(promoHits * 8) -
-      (text.length < 40 ? 8 : 0) -
+      (text.length < 40 && !isPointer ? 8 : 0) -
       (isTeaserOnly ? 24 : 0) -
       authorPenalty -
       preferenceAdjustment.penalty,
@@ -248,6 +262,7 @@ function buildDecisionReasons(
   if (breakdown.freshness >= 8) reasons.push('新');
   if (isOfficialSource(item)) reasons.push('官方');
   if (breakdown.xArticleBonus > 0) reasons.push('X article');
+  if (isPrimarySourcePointer(item)) reasons.push('策展指针');
   if (item.substackTeaserOnly) reasons.push('订阅墙/预览内容');
   if (breakdown.substance < 12) reasons.push('低质量内容');
   if (breakdown.evidence < 6) reasons.push('弱证据');
