@@ -18,15 +18,24 @@ const DEFAULT_SELECT_PORT = 8427;
 // never calls any LLM: curateModule is imported solely for the deterministic
 // enrichCuratedItemsWithDiagnostics helper.
 const MODULE_FILES = [
+  'artifact-identity',
   'collect',
   'curate',
+  'curation-artifact',
   'draft',
   'envDiagnostics',
+  'feedbackCli',
   'format',
   'preferences',
   'proxy',
   'publish',
+  'publication-workflow',
   'rank',
+  'ranking-artifact',
+  'score-feedback-history',
+  'selection-decision',
+  'selection-decision-store',
+  'source-registry',
   'state',
 ];
 
@@ -41,6 +50,7 @@ const VALID_COMMANDS = new Set([
   'select-start',
   'select-stop',
   'publish',
+  'feedback-apply',
 ]);
 
 const VALID_CATEGORIES = ['Product', 'Tutorial', 'Opinions/Thoughts'];
@@ -70,7 +80,9 @@ Agent-driven pipeline (no third-party LLM — the agent curates):
                        user can steer. The server self-exits on confirm.
   select-stop          Stop the detached select server (from select-start's select.pid) and remove
                        the pidfile. Idempotent — run it after publish to clean up lingering servers.
-  publish              Format the selection, publish files, advance state, clear the draft.
+  publish              Format the selection, persist feedback review, advance state, clear the draft.
+  feedback-apply --date=YYYY-MM-DD
+                       Validate output/<date>-feedback-adjustment.json and atomically update policy.
 
 Default command: collect (start a fresh collection; if a draft already exists it reports and
                      exits without destroying it). Set DAILY_NEWS_REPO to override the daily-news repo path.
@@ -89,11 +101,13 @@ export function parseCliArgs(args) {
   if (!VALID_COMMANDS.has(command)) {
     throw new Error(`Unsupported daily-news agent command: ${command}`);
   }
+  const date = args.find((arg) => arg.startsWith('--date='))?.slice('--date='.length);
   return {
     command,
     resume: args.includes('--resume'),
     discard: args.includes('--discard'),
     force: args.includes('--force'),
+    ...(date ? { date } : {}),
   };
 }
 
@@ -173,39 +187,66 @@ async function importRepoModule(repoRoot, name) {
 
 async function loadPipeline(repoRoot) {
   const [
+    artifactIdentityModule,
     collectModule,
     curateModule,
+    curationArtifactModule,
     draftModule,
     envDiagnosticsModule,
+    feedbackCliModule,
     formatModule,
     preferencesModule,
     proxyModule,
     publishModule,
+    publicationWorkflowModule,
     rankModule,
+    rankingArtifactModule,
+    scoreFeedbackHistoryModule,
+    selectionDecisionModule,
+    selectionDecisionStoreModule,
+    sourceRegistryModule,
     stateModule,
   ] = await Promise.all([
+    importRepoModule(repoRoot, 'artifact-identity'),
     importRepoModule(repoRoot, 'collect'),
     importRepoModule(repoRoot, 'curate'),
+    importRepoModule(repoRoot, 'curation-artifact'),
     importRepoModule(repoRoot, 'draft'),
     importRepoModule(repoRoot, 'envDiagnostics'),
+    importRepoModule(repoRoot, 'feedbackCli'),
     importRepoModule(repoRoot, 'format'),
     importRepoModule(repoRoot, 'preferences'),
     importRepoModule(repoRoot, 'proxy'),
     importRepoModule(repoRoot, 'publish'),
+    importRepoModule(repoRoot, 'publication-workflow'),
     importRepoModule(repoRoot, 'rank'),
+    importRepoModule(repoRoot, 'ranking-artifact'),
+    importRepoModule(repoRoot, 'score-feedback-history'),
+    importRepoModule(repoRoot, 'selection-decision'),
+    importRepoModule(repoRoot, 'selection-decision-store'),
+    importRepoModule(repoRoot, 'source-registry'),
     importRepoModule(repoRoot, 'state'),
   ]);
 
   return {
+    artifactIdentityModule,
     collectModule,
     curateModule,
+    curationArtifactModule,
     draftModule,
     envDiagnosticsModule,
+    feedbackCliModule,
     formatModule,
     preferencesModule,
     proxyModule,
     publishModule,
+    publicationWorkflowModule,
     rankModule,
+    rankingArtifactModule,
+    scoreFeedbackHistoryModule,
+    selectionDecisionModule,
+    selectionDecisionStoreModule,
+    sourceRegistryModule,
     stateModule,
   };
 }
@@ -216,21 +257,24 @@ export function formatDateFromUnixSeconds(unixSeconds) {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-export function advancePublishedState(state, sources, collectedAt) {
-  const nextState = {
-    sources: {
-      twitter: { lastPublishedTime: state.sources.twitter.lastPublishedTime },
-      substack: { lastPublishedTime: state.sources.substack.lastPublishedTime },
-    },
+export function buildAgentRankingArtifact({
+  draft, rankedItems, candidateItems, date, policyRevision, createRunId, featureVersion,
+}) {
+  return {
+    schemaVersion: 1,
+    runId: createRunId({
+      collectedAt: draft.collectedAt,
+      enabledSources: draft.enabledSources,
+      itemIds: draft.items.map((item) => item.id),
+    }),
+    date,
+    curationMode: 'agent-curator',
+    featureVersion,
+    collectedAt: draft.collectedAt,
+    policyRevision,
+    rankedItems,
+    candidateIds: candidateItems.map((item) => item.id),
   };
-
-  for (const source of sources) {
-    if (source === 'twitter' || source === 'substack') {
-      nextState.sources[source] = { lastPublishedTime: collectedAt };
-    }
-  }
-
-  return nextState;
 }
 
 export function mergeForcedSelectItems(candidateItems, rankedItems) {
@@ -244,45 +288,6 @@ export function mergeForcedSelectItems(candidateItems, rankedItems) {
   }
 
   return merged;
-}
-
-export function annotateRankedItems(rankedItems, candidateItems, curatedItems, selectedItems) {
-  const candidateIds = new Set(candidateItems.map((item) => item.id));
-  const curatedIds = new Set(curatedItems.map((item) => item.id));
-  const selectedIds = selectedItems ? new Set(selectedItems.map((item) => item.id)) : null;
-
-  return rankedItems.map((item) => {
-    const annotated = {
-      ...item,
-      enteredCandidatePool: candidateIds.has(item.id),
-      selectedByLlm: curatedIds.has(item.id),
-    };
-
-    if (selectedIds) {
-      annotated.selectedByHuman = selectedIds.has(item.id);
-    }
-
-    return annotated;
-  });
-}
-
-export function buildSelectionReport({
-  date,
-  collectionWarnings,
-  rankedItems,
-  candidateItems,
-  curatedItems,
-  selectedItems,
-  curationDiagnostics,
-}) {
-  return {
-    date,
-    ...(collectionWarnings && collectionWarnings.length > 0 ? { collectionWarnings } : {}),
-    curationDiagnostics,
-    rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems, selectedItems),
-    curatedItems,
-    selectedItems,
-  };
 }
 
 export function trimCandidatePool(items, poolSize) {
@@ -378,12 +383,16 @@ function validateCurateOutput(output) {
 
 // ───────────────────────── interactive select html ─────────────────────────
 
-export function buildSelectHtml(curation, serverOrigin) {
+export function buildSelectHtml(curation, serverOrigin, decision = null) {
   const date = curation.date;
   const target = `${DEFAULT_SELECT_TARGET_MIN}-${DEFAULT_SELECT_TARGET_MAX}`;
   // Escape so the JSON is safe inside <script> (handles </script>, U+2028/2029, etc.).
   const dataJson = JSON.stringify({
     date,
+    runId: curation.runId,
+    curationRevision: curation.curationRevision,
+    decisionRevision: decision?.revision ?? 0,
+    scoreFeedbackById: decision?.scoreFeedbackById ?? {},
     serverOrigin,
     targetMin: DEFAULT_SELECT_TARGET_MIN,
     targetMax: DEFAULT_SELECT_TARGET_MAX,
@@ -429,6 +438,11 @@ export function buildSelectHtml(curation, serverOrigin) {
   .reason{ color:var(--muted); font-style:italic; }
   .ed{ color:var(--ok); }
   .teaser{ color:var(--warn); }
+  .feedback { display:flex; gap:.4rem; align-items:center; margin-top:.55rem; flex-wrap:wrap; }
+  .feedback button { background:transparent; color:var(--fg); border:1px solid var(--border); padding:.3rem .65rem; font-size:.8rem; }
+  .feedback button.active { border-color:var(--accent); color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); }
+  .feedback .status { color:var(--muted); font-size:.78rem; }
+  .feedback .error { color:var(--bad); font-size:.78rem; }
   a { color:var(--accent); text-decoration:none; word-break:break-all; }
   a:hover{ text-decoration:underline; }
   .thumbs{ display:flex; flex-wrap:wrap; gap:.4rem; margin:.35rem 0; }
@@ -462,7 +476,9 @@ export function buildSelectHtml(curation, serverOrigin) {
 const DATA = ${dataJson};
 // Persist the user's ticks across reloads/restarts so an accidental refresh or a server
 // restart never loses their selections.
-const STORE_KEY = 'daily-news-select-' + DATA.date;
+const STORE_KEY = 'daily-news-select:' + DATA.runId + ':' + DATA.curationRevision;
+let decisionRevision = DATA.decisionRevision;
+let confirmedFeedback = {...DATA.scoreFeedbackById};
 const CATS = ['Product','Tutorial','Opinions/Thoughts'];
 const byCat = {};
 for (const c of CATS) byCat[c] = [];
@@ -480,7 +496,7 @@ for (const cat of CATS) {
   for (const it of list) main.appendChild(renderItem(it));
 }
 function renderItem(it){
-  const label = document.createElement('label'); label.className='item';
+  const card = document.createElement('div'); card.className='item';
   const cb = document.createElement('input'); cb.type='checkbox'; cb.value=it.id; cb.dataset.id=it.id;
   cb.addEventListener('change', () => { recount(); saveSelection(); });
   const body = document.createElement('div'); body.className='body';
@@ -506,7 +522,38 @@ function renderItem(it){
   links.appendChild(link('原帖/来源', it.originUrl || it.url));
   if (it.originUrl && it.originUrl!==it.url) links.appendChild(link('引用', it.url));
   body.appendChild(meta); body.appendChild(links);
-  label.appendChild(cb); label.appendChild(body); return label;
+  const feedback=document.createElement('div'); feedback.className='feedback'; feedback.dataset.feedbackFor=it.id;
+  feedback.appendChild(feedbackButton(it.id, 'too_high', '评分过高'));
+  feedback.appendChild(feedbackButton(it.id, 'too_low', '评分过低'));
+  const status=document.createElement('span'); status.className='status'; feedback.appendChild(status);
+  const error=document.createElement('span'); error.className='error'; feedback.appendChild(error);
+  body.appendChild(feedback); card.appendChild(cb); card.appendChild(body); renderFeedback(it.id); return card;
+}
+function feedbackButton(id, direction, label){
+  const button=document.createElement('button'); button.type='button'; button.textContent=label;
+  button.dataset.feedbackId=id; button.dataset.direction=direction;
+  button.addEventListener('click', (event)=>{ event.preventDefault(); event.stopPropagation(); sendFeedback(id, direction); });
+  return button;
+}
+function renderFeedback(id){
+  const row=document.querySelector('[data-feedback-for="'+CSS.escape(id)+'"]'); if(!row) return;
+  const active=confirmedFeedback[id]?.direction;
+  row.querySelectorAll('button').forEach(button=>button.classList.toggle('active', button.dataset.direction===active));
+}
+async function sendFeedback(itemId, direction){
+  const row=document.querySelector('[data-feedback-for="'+CSS.escape(itemId)+'"]');
+  const buttons=[...row.querySelectorAll('button')]; const status=row.querySelector('.status'); const error=row.querySelector('.error');
+  buttons.forEach(button=>button.disabled=true); status.textContent='保存中…'; error.textContent='';
+  try {
+    const res=await fetch(DATA.serverOrigin+'/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({date:DATA.date, runId:DATA.runId, curationRevision:DATA.curationRevision,
+        revision:decisionRevision, itemId, direction})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || ('HTTP '+res.status));
+    decisionRevision=data.decision.revision; confirmedFeedback={...data.decision.scoreFeedbackById};
+    renderFeedback(itemId); status.textContent=confirmedFeedback[itemId] ? '已保存' : '已撤销';
+  } catch(err) { renderFeedback(itemId); status.textContent=''; error.textContent='保存失败：'+err.message; }
+  finally { buttons.forEach(button=>button.disabled=false); }
 }
 function chip(cls, txt){ const s=document.createElement('span'); s.className='badge '+cls; s.textContent=txt; return s; }
 function textNode(t){ if(!t) return document.createElement('span'); return chip('', t); }
@@ -536,7 +583,7 @@ async function confirm(){
   if (ids.length===0){ msg.className='msg bad'; msg.textContent='未选择任何条目'; return; }
   msg.textContent='提交中…'; document.getElementById('confirm').disabled=true;
   try{
-    const res=await fetch(DATA.serverOrigin+'/select', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:DATA.date, selectedIds:ids})});
+    const res=await fetch(DATA.serverOrigin+'/select', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:DATA.date, runId:DATA.runId, curationRevision:DATA.curationRevision, revision:decisionRevision, selectedIds:ids})});
     const data=await res.json().catch(()=>({}));
     if (!res.ok || !data.ok){ throw new Error(data.error || ('HTTP '+res.status)); }
     msg.className='msg ok'; msg.textContent='✓ 已保存 '+data.count+' 条选择，可以关闭页面并回到终端。';
@@ -564,7 +611,7 @@ function formatRejectionCounts(diagnostics) {
   return parts.length > 0 ? parts.join(', ') : 'none';
 }
 
-async function runStatus({ pipeline, repoRoot, log }) {
+export async function runStatus({ pipeline, repoRoot, log }) {
   const draft = await pipeline.draftModule.readPendingDraft();
   if (!draft || !draft.items?.length) {
     return ['daily-news status', 'No pending draft.', 'Next action: run `collect`.'].join('\n');
@@ -574,10 +621,14 @@ async function runStatus({ pipeline, repoRoot, log }) {
   const out = join(repoRoot, 'output');
   const files = {
     'curate-input.json': existsSync(join(out, `${date}-curate-input.json`)),
+    'ranking.json': existsSync(join(out, `${date}-ranking.json`)),
     'curate-output.json': existsSync(join(out, `${date}-curate-output.json`)),
     'curation.json': existsSync(join(out, `${date}-curation.json`)),
     'select.html': existsSync(join(out, `${date}-select.html`)),
-    'selection.json': existsSync(join(out, `${date}-selection.json`)),
+    'selection-decision.json': existsSync(join(out, `${date}-selection-decision.json`)),
+    'selection-report.json': existsSync(join(out, `${date}-selection-report.json`)),
+    'feedback-review.json': existsSync(join(out, `${date}-feedback-review.json`)),
+    'feedback-adjustment.json': existsSync(join(out, `${date}-feedback-adjustment.json`)),
   };
 
   let next;
@@ -587,8 +638,8 @@ async function runStatus({ pipeline, repoRoot, log }) {
     next = 'agent curates (read curate-input.json → write curate-output.json), then run `curate-apply`';
   } else if (!files['curation.json']) {
     next = 'run `curate-apply`';
-  } else if (!files['selection.json']) {
-    next = 'run `select`, open the URL, choose items, confirm';
+  } else if (!files['selection-decision.json']) {
+    next = 'run `select`, open the URL, choose items, add optional score feedback, confirm';
   } else {
     next = 'run `publish`';
   }
@@ -599,7 +650,7 @@ async function runStatus({ pipeline, repoRoot, log }) {
     `Draft items: ${draft.items.length}`,
     `Collected at: ${new Date(draft.collectedAt * 1000).toISOString()}`,
     `Enabled sources: ${draft.enabledSources.join(', ') || '<none>'}`,
-    `State lastPublished: twitter=${state.sources.twitter.lastPublishedTime}, substack=${state.sources.substack.lastPublishedTime}`,
+    `State lastPublished: ${pipeline.sourceRegistryModule.formatPublishedCursorStatus(state)}`,
     '',
     'Stage artifacts:',
     ...Object.entries(files).map(([name, ok]) => `  ${ok ? '✓' : '✗'} ${name}`),
@@ -668,7 +719,8 @@ async function runCurateInput({ pipeline, repoRoot, env, log }) {
     throw new Error(`Invalid DAILY_NEWS_CURATE_POOL: ${env.DAILY_NEWS_CURATE_POOL}`);
   }
 
-  const ranked = pipeline.rankModule.rankItems(draft.items, pipeline.preferencesModule.readConfirmedPreferenceRules());
+  const preferenceRules = pipeline.preferencesModule.readConfirmedPreferenceRules();
+  const ranked = pipeline.rankModule.rankItems(draft.items, preferenceRules);
   const candidate = pipeline.rankModule.selectCandidatePool(ranked);
   const merged = mergeForcedSelectItems(candidate, ranked);
   const pool = trimCandidatePool(merged, poolSize);
@@ -676,8 +728,20 @@ async function runCurateInput({ pipeline, repoRoot, env, log }) {
     throw new Error('curate-input produced zero candidates (all items hard-filtered?).');
   }
 
+  const ranking = buildAgentRankingArtifact({
+    draft,
+    rankedItems: ranked,
+    candidateItems: pool,
+    date,
+    policyRevision: preferenceRules.policyRevision ?? 1,
+    createRunId: pipeline.artifactIdentityModule.createRunId,
+    featureVersion: pipeline.artifactIdentityModule.FEATURE_VERSION,
+  });
+  await pipeline.rankingArtifactModule.writeRankingArtifact(ranking, join(repoRoot, 'output'));
+
   const payload = {
     date,
+    runId: ranking.runId,
     collectedAt: draft.collectedAt,
     enabledSources: draft.enabledSources,
     ...(draft.collectionWarnings?.length ? { collectionWarnings: draft.collectionWarnings } : {}),
@@ -723,16 +787,17 @@ async function runCurateApply({ pipeline, repoRoot, log }) {
     );
   }
 
-  const curation = {
-    date,
-    collectedAt: input.collectedAt ?? draft.collectedAt,
-    enabledSources: input.enabledSources ?? draft.enabledSources,
-    ...(input.collectionWarnings?.length ? { collectionWarnings: input.collectionWarnings } : {}),
+  const rankingPath = artifactPath(repoRoot, date, 'ranking.json');
+  if (!existsSync(rankingPath)) throw new Error(`Missing ${rankingPath}. Run \`curate-input\` first.`);
+  const ranking = pipeline.rankingArtifactModule.decodeRankingArtifact(await readJson(rankingPath));
+  if (input.runId !== ranking.runId) throw new Error('curate-input and ranking runId mismatch');
+  const curation = pipeline.curationArtifactModule.createCurationArtifact({
+    ranking,
     curatedItems: result.items,
+    collectionWarnings: input.collectionWarnings,
     curationDiagnostics: result.diagnostics,
-  };
-  const curationPath = artifactPath(repoRoot, date, 'curation.json');
-  await writeJson(curationPath, curation);
+  });
+  const curationPath = await pipeline.curationArtifactModule.writeCurationArtifact(curation, join(repoRoot, 'output'));
 
   return [
     'daily-news curate-apply: complete',
@@ -881,24 +946,25 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
   const date = formatDateFromUnixSeconds(draft.collectedAt);
   const curationPath = artifactPath(repoRoot, date, 'curation.json');
   const selectionPath = artifactPath(repoRoot, date, 'selection.json');
+  const decisionPath = artifactPath(repoRoot, date, 'selection-decision.json');
   const htmlPath = artifactPath(repoRoot, date, 'select.html');
 
   if (!existsSync(curationPath)) {
     throw new Error(`Missing ${curationPath}. Run \`curate-apply\` first.`);
   }
-  if (existsSync(selectionPath) && !args.force) {
+  if (existsSync(selectionPath) && existsSync(decisionPath) && !args.force) {
     return [
       'daily-news select: selection already exists',
-      `Selection: ${selectionPath}`,
+      `Selection: ${decisionPath}`,
       'Re-run with --force to discard it and choose again.',
       'Next action: run `publish`.',
     ].join('\n');
   }
 
-  const curation = await readJson(curationPath);
-  if (!Array.isArray(curation.curatedItems) || curation.curatedItems.length === 0) {
-    throw new Error(`${curationPath} has no curated items.`);
-  }
+  const curation = pipeline.curationArtifactModule.decodeCurationArtifact(await readJson(curationPath));
+  if (curation.curatedItems.length === 0) throw new Error(`${curationPath} has no curated items.`);
+  const decisionStore = new pipeline.selectionDecisionStoreModule.SelectionDecisionStore(decisionPath, curation);
+  const initialDecision = await decisionStore.initialize(new Date().toISOString());
 
   await new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
@@ -914,8 +980,35 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
           res.end(JSON.stringify({ ok: true }));
           return;
         }
-        if (req.method === 'POST' && url.pathname === '/select') {
+        if (req.method === 'POST' && url.pathname === '/feedback') {
           let payload;
+          try { payload = JSON.parse(await readRequestBody(req)); }
+          catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'invalid JSON body' })); return;
+          }
+          if (payload.date !== curation.date || payload.runId !== curation.runId ||
+              payload.curationRevision !== curation.curationRevision) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'feedback identity mismatch' })); return;
+          }
+          if (payload.direction !== 'too_high' && payload.direction !== 'too_low') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'invalid feedback direction' })); return;
+          }
+          try {
+            const decision = await decisionStore.update((current) =>
+              pipeline.selectionDecisionModule.updateScoreFeedback(current, {
+                itemId: payload.itemId, direction: payload.direction, updatedAt: new Date().toISOString(),
+              }, curation));
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, decision })); return;
+          } catch (error) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })); return;
+          }
+        }
+        if (req.method === 'POST' && url.pathname === '/select') {          let payload;
           try {
             payload = JSON.parse(await readRequestBody(req));
           } catch {
@@ -924,14 +1017,16 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
             return;
           }
           try {
-            const selected = resolveSelection(curation, payload.selectedIds);
-            if (selected.length === 0) {
-              throw new Error('no items selected');
-            }
+            if (payload.date !== curation.date || payload.runId !== curation.runId ||
+                payload.curationRevision !== curation.curationRevision) throw new Error('selection identity mismatch');
+            const decision = await decisionStore.update((current) =>
+              pipeline.selectionDecisionModule.confirmSelection(
+                current, payload.selectedIds, curation, new Date().toISOString()));
+            const selected = pipeline.selectionDecisionModule.resolveSelectedItems(decision, curation);
             await writeJson(selectionPath, { date, selectedItems: selected });
-            log(`[daily-news-agent] selection saved: ${selected.length} items → ${selectionPath}`);
+            log(`[daily-news-agent] selection saved: ${selected.length} items → ${decisionPath}`);
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true, count: selected.length, path: selectionPath }));
+            res.end(JSON.stringify({ ok: true, count: selected.length, path: decisionPath, decision }));
             setTimeout(() => {
               server.close();
               process.exit(0);
@@ -969,15 +1064,15 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
       reject(err);
     });
     server.listen(desiredPort, '127.0.0.1', () => {
-      html = buildSelectHtml(curation, origin);
+      html = buildSelectHtml(curation, origin, initialDecision);
       // Persist a static copy as an audit trail / file:// fallback (raw HTML, not JSON).
       mkdir(dirname(htmlPath), { recursive: true })
         .then(() => writeFile(htmlPath, html, 'utf-8'))
         .catch(() => {});
       log(`SELECT_URL=${origin}/`);
       log(`SELECT_HTML=${htmlPath}`);
-      log(`SELECTION_FILE=${selectionPath}`);
-      log('STATUS=waiting — open the URL, choose 6-10 items, then click 确认发布.');
+      log(`SELECTION_FILE=${decisionPath}`);
+      log('STATUS=waiting — open the URL, choose 6-10 items, add optional score feedback, then click 确认发布.');
       openInBrowser(`${origin}/`, log);
     });
 
@@ -992,7 +1087,7 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
 
   // Reached only when a confirm was short-circuited in tests, or in the reuse path (another select
   // server was already running on this port and will write the file on confirm).
-  return `daily-news select: waiting for confirm; selection will be written to ${selectionPath}`;
+  return `daily-news select: waiting for confirm; selection will be written to ${decisionPath}`;
 }
 
 async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env }) {
@@ -1000,6 +1095,7 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
   const date = formatDateFromUnixSeconds(draft.collectedAt);
   const curationPath = artifactPath(repoRoot, date, 'curation.json');
   const selectionPath = artifactPath(repoRoot, date, 'selection.json');
+  const decisionPath = artifactPath(repoRoot, date, 'selection-decision.json');
   const htmlPath = artifactPath(repoRoot, date, 'select.html');
   const pidPath = artifactPath(repoRoot, date, 'select.pid');
   const logPath = artifactPath(repoRoot, date, 'select.log');
@@ -1009,10 +1105,12 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
   if (!existsSync(curationPath)) {
     throw new Error(`Missing ${curationPath}. Run \`curate-apply\` first.`);
   }
-  if (existsSync(selectionPath) && !args.force) {
+  const existingDecision = existsSync(decisionPath)
+    ? pipeline.selectionDecisionModule.decodeSelectionDecision(await readJson(decisionPath)) : null;
+  if (existingDecision?.selection.status === 'confirmed' && !args.force) {
     return [
       'daily-news select-start: selection already exists',
-      `Selection: ${selectionPath}`,
+      `Selection: ${decisionPath}`,
       'Re-run with --force to discard it and choose again.',
       'Next action: run `publish` (then `select-stop` if a server is still running).',
     ].join('\n');
@@ -1024,8 +1122,8 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
     return [
       'daily-news select-start: a select server is already running (reused).',
       `SELECT_URL=${origin}/`,
-      `SELECTION_FILE=${selectionPath}`,
-      'Choose 6-10 items and click 确认发布, then tell the agent to publish. The agent is NOT blocking.',
+      `SELECTION_FILE=${decisionPath}`,
+      'Choose 6-10 items, add optional score feedback, and click 确认发布. The agent is NOT blocking.',
     ].join('\n');
   }
 
@@ -1064,7 +1162,7 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
     'daily-news select-start: detached select server launched (browser opens automatically).',
     `SELECT_URL=${origin}/`,
     `SELECT_HTML=${htmlPath}`,
-    `SELECTION_FILE=${selectionPath}`,
+    `SELECTION_FILE=${decisionPath}`,
     `SERVER_PID_FILE=${pidPath}`,
     `SERVER_LOG=${logPath}`,
     'The agent is NOT blocking. Tell the user to choose 6-10 items and click 确认发布, then to tell',
@@ -1118,55 +1216,53 @@ async function runSelectStop({ pipeline, repoRoot, log }) {
 export async function runPublish({ pipeline, repoRoot, log }) {
   const draft = await readDraftOrFail(pipeline);
   const date = formatDateFromUnixSeconds(draft.collectedAt);
+  const rankingPath = artifactPath(repoRoot, date, 'ranking.json');
   const curationPath = artifactPath(repoRoot, date, 'curation.json');
-  const selectionPath = artifactPath(repoRoot, date, 'selection.json');
-
-  if (!existsSync(curationPath)) {
-    throw new Error(`Missing ${curationPath}. Run \`curate-apply\` first.`);
-  }
-  if (!existsSync(selectionPath)) {
-    throw new Error(`Missing ${selectionPath}. Run \`select\` and confirm a selection first.`);
+  const decisionPath = artifactPath(repoRoot, date, 'selection-decision.json');
+  for (const path of [rankingPath, curationPath, decisionPath]) {
+    if (!existsSync(path)) throw new Error(`Missing ${path}. Complete curate and select first.`);
   }
 
-  const curation = await readJson(curationPath);
-  const selection = await readJson(selectionPath);
-  const selectedItems = Array.isArray(selection.selectedItems) ? selection.selectedItems : [];
-  if (selectedItems.length === 0) {
-    throw new Error(`${selectionPath} has no selectedItems.`);
-  }
-
-  const publishedState = await pipeline.stateModule.readState();
-  const ranked = pipeline.rankModule.rankItems(draft.items, pipeline.preferencesModule.readConfirmedPreferenceRules());
-  const candidateItems = pipeline.rankModule.selectCandidatePool(ranked);
-
-  const formatted = pipeline.formatModule.format(selectedItems, date);
-  const report = buildSelectionReport({
-    date,
-    collectionWarnings: curation.collectionWarnings,
-    rankedItems: ranked,
-    candidateItems,
-    curatedItems: curation.curatedItems,
-    selectedItems,
-    curationDiagnostics: curation.curationDiagnostics,
-  });
-
-  await pipeline.preferencesModule.recordPreferenceHistoryFromSelectionReport(report, {
-    reportPath: `output/${date}-selection-report.json`,
-  });
-  await pipeline.publishModule.publish(formatted, report);
-  await pipeline.stateModule.writeState(
-    advancePublishedState(publishedState, draft.enabledSources, draft.collectedAt),
+  const ranking = pipeline.rankingArtifactModule.decodeRankingArtifact(await readJson(rankingPath));
+  const curation = pipeline.curationArtifactModule.decodeCurationArtifact(await readJson(curationPath));
+  const decision = pipeline.selectionDecisionModule.decodeSelectionDecision(await readJson(decisionPath));
+  const reviewPath = artifactPath(repoRoot, date, 'feedback-review.json');
+  const historyPath = join(repoRoot, 'data', 'score-feedback-history.jsonl');
+  const result = await pipeline.publicationWorkflowModule.finalizePublication(
+    { draft, ranking, curation, decision },
+    {
+      readState: pipeline.stateModule.readState,
+      writePublicationOutputs: (formatted, report) => pipeline.publishModule.publish(formatted, report),
+      recordSelectionHistory: (report) => pipeline.preferencesModule.recordPreferenceHistoryFromSelectionReport(
+        report, { reportPath: `output/${date}-selection-report.json`, runId: report.runId }),
+      recordScoreFeedbackHistory: (events) =>
+        pipeline.scoreFeedbackHistoryModule.appendScoreFeedbackHistoryIdempotently(events, historyPath),
+      writeFeedbackReview: (review) => writeJson(reviewPath, review),
+      writeState: pipeline.stateModule.writeState,
+      clearDraft: pipeline.draftModule.clearPendingDraft,
+    },
   );
-  await pipeline.draftModule.clearPendingDraft();
 
   return [
     'daily-news publish: complete',
     `Date: ${date}`,
-    `Selected items: ${selectedItems.length}`,
+    `Selected items: ${result.selectedItems.length}`,
     `Substack draft: output/${date}-substack.html`,
     `Selection report: output/${date}-selection-report.json`,
+    result.feedbackCount === 0
+      ? '本期无评分反馈'
+      : `Feedback review: output/${date}-feedback-review.json`,
     'State advanced and pending draft cleared.',
   ].join('\n');
+}
+
+async function runFeedbackApply({ pipeline, date }) {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('feedback-apply requires --date=YYYY-MM-DD');
+  }
+  const parsed = pipeline.feedbackCliModule.parseFeedbackCliArgs(['apply', `--date=${date}`]);
+  const result = await pipeline.feedbackCliModule.runFeedbackApply(parsed);
+  return `daily-news feedback-apply: ${result.status} (policyRevision=${result.policyRevision})`;
 }
 
 async function runDiagnose({ pipeline }) {
@@ -1182,6 +1278,7 @@ export async function runAgent({
   resume = false,
   discard = false,
   force = false,
+  date,
   repoRoot = resolveRepoRoot(),
   env = process.env,
   log = console.log,
@@ -1198,7 +1295,7 @@ export async function runAgent({
   const pipeline = await loadPipeline(repoRoot);
   pipeline.proxyModule.applyProxyFromEnv();
 
-  const args = { resume, discard, force };
+  const args = { resume, discard, force, date };
 
   switch (command) {
     case 'diagnose':
@@ -1219,6 +1316,8 @@ export async function runAgent({
       return runSelectStop({ pipeline, repoRoot, log });
     case 'publish':
       return runPublish({ pipeline, repoRoot, log });
+    case 'feedback-apply':
+      return runFeedbackApply({ pipeline, date });
     default:
       throw new Error(`Unsupported daily-news agent command: ${command}`);
   }
@@ -1237,6 +1336,7 @@ export async function main(argv = process.argv.slice(2)) {
     resume: parsed.resume,
     discard: parsed.discard,
     force: parsed.force,
+    date: parsed.date,
     repoRoot,
   });
   if (result) console.log(result);

@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as collectModule from '../src/collect.js';
 
+test('parseEnabledSources uses registry defaults and rejects unknown sources', () => {
+  assert.deepEqual(collectModule.parseEnabledSources(undefined), ['twitter', 'aihot']);
+  assert.deepEqual(collectModule.parseEnabledSources('substack,twitter,substack'), ['substack', 'twitter']);
+  assert.throws(() => collectModule.parseEnabledSources('twitter,rss'), /Unsupported ENABLED_SOURCES: rss/);
+});
+
 test('redactCollectDiagnosticCommand hides proxy credentials and Twitter auth env values', () => {
   assert.equal(
     collectModule.redactCollectDiagnosticCommand(

@@ -10,6 +10,7 @@
     "generate:review:diagnose": "DAILY_NEWS_ENV_DIAGNOSTICS=1 node --import tsx src/generate.ts --mode=review --diagnose-collect-env",
     "preferences:update": "node --import tsx src/preferenceCli.ts update",
     "preferences:review": "node --import tsx src/preferenceCli.ts review",
+    "feedback:apply": "node --import tsx src/feedbackCli.ts apply",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {

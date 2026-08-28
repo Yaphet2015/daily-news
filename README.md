@@ -32,7 +32,9 @@ npm run preferences:update
 npm run preferences:review
 ```
 
-`generate` 在人工 `select` 确认后会把本次全候选结构化特征和最终选择结果追加到本机私有历史。`preferences:update` 会回填历史 `selection-report` 并生成偏好画像和建议；`preferences:review` 只把你勾选确认的建议写入生效规则，后续 X For You 预筛和 ranking 才会使用这些规则。
+`generate` 在人工 `select` 确认后会把本次全候选结构化特征和最终选择结果追加到本机私有历史。`preferences:update` 会回填历史 `selection-report` 并生成偏好画像和建议；`preferences:review` 只把你勾选确认的建议写入生效规则。
+
+Agent HTML select 还提供独立的 `评分过高` / `评分过低` 按钮。每次点击立即写入 `output/<date>-selection-decision.json`，不依赖是否勾选发布。publish 后，有反馈时生成 `feedback-review.json` 并追加 `data/score-feedback-history.jsonl`。Agent 按内容 Tag 归因，写出受约束的 `feedback-adjustment.json`，再运行 `feedback-apply --date=<date>`。按钮反馈不会修改作者、域名、来源开关或 `@tom_doerr` hard filter。
 
 ## 快速开始
 
@@ -82,7 +84,7 @@ npm run generate:review:diagnose
 
 | 变量 | 说明 |
 |------|------|
-| `ENABLED_SOURCES` | 逗号分隔，可选 `twitter`、`substack` |
+| `ENABLED_SOURCES` | 逗号分隔，可选 `twitter`、`substack`、`aihot`；默认 `twitter,aihot` |
 
 ### Twitter 采集
 
@@ -190,6 +192,12 @@ output/YYYY-MM-DD-substack.html
 | 路径 | 说明 |
 |------|------|
 | `output/YYYY-MM-DD-substack.html` | Substack 格式 HTML，每次运行生成 |
+| `output/YYYY-MM-DD-ranking.json` | 当期 canonical ranking，publish 不重新计算 |
+| `output/YYYY-MM-DD-curation.json` | 当期 canonical curation |
+| `output/YYYY-MM-DD-selection-decision.json` | 当期选择 ID 与显式评分反馈的 SSOT |
+| `output/YYYY-MM-DD-selection-report.json` | 选择、Tag、Factor 与反馈审计报告 |
+| `output/YYYY-MM-DD-feedback-review.json` | 有评分反馈时生成的当期审查资料 |
+| `output/YYYY-MM-DD-feedback-adjustment.json` | Agent 写出的待校验调整 |
 | `output/YYYY-MM-DD-review.json` | 非交互审阅包，包含采集时间、来源、排序元数据、AI 整理结果和下一步命令 |
 | `output/YYYY-MM-DD-review.md` | 面向人工和 Codex 摘要的审阅版 Markdown |
 | `$OBSIDIAN_VAULT_PATH/YYYY-MM/YYYY-MM-DD-daily-news.md` | Obsidian Markdown（配置后生成） |
@@ -198,7 +206,8 @@ output/YYYY-MM-DD-substack.html
 | `data/preference-history.jsonl` | 本机私有的人工选择历史，记录每次 select 的全候选结构化特征与选中/未选中结果 |
 | `data/preference-profile.json` | 本机私有的偏好画像，由历史选择汇总生成 |
 | `data/preference-suggestions.json` | 本机私有的待确认偏好建议 |
-| `data/preference-rules.json` | 本机私有、经人工确认后才生效的采集/排序偏好规则 |
+| `data/preference-rules.json` | 本机私有的 confirmed Tag / Ranking Signal overlay；唯一 policy SSOT |
+| `data/score-feedback-history.jsonl` | 按 feedback event ID 幂等记录的长期评分反馈历史 |
 
 ---
 
@@ -223,13 +232,14 @@ output/YYYY-MM-DD-substack.html
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
 - **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接；最终发布的 `来源` 使用 bullet 外部链接的锚文本或域名，而不是 Ben's Bites
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，`whyItMatters` 可为空字符串，不再因为单篇文章缺少 caveat/signals/why 而整次中断。若 RSS 只暴露订阅墙/预览内容，则保留该条用于审计，但跳过全文 briefing、排序降权，并在候选理由中标记 `订阅墙/预览内容`
-- **显式排序层**：主整理模型之前先做确定性打分、重复惩罚与候选池裁剪；Substack 长文会先带着 briefing 参与 ranking，避免只看 RSS teaser 造成误判。互动数据只作为 Twitter 的辅助信号；当前候选池稳定上限为 `150`。**策展指针**：正文很短但带主源外链（或已解析出 `linkedSource`）的 tweet，价值在链接文章而不在自身文字，ranking 会给 substance 设下限、不套用短文本惩罚、也不再用低 substance 把互动钳到辅助信号，并打上 `策展指针` 标签——否则像 "recommended reading. <link>" 这类可信策展短推会被系统性判成 `低质量内容` 沉到候选池之外
+- **Tag + Ranking Signal 统一排序**：主整理前先把信息量、证据、新鲜度、可操作性、互动等量化为 Ranking Signal，再匹配受控内容 Tag，并统一生成 Score Factor。`decisionReasons` 只用于展示。confirmed overlay 对同一 Factor 只做一次 weight 替换。无 overlay 时保持原有分数和排序。互动仍只作为 Twitter 辅助信号；候选池上限为 `150`。正文很短但带主源外链的策展指针继续获得 substance 下限保护
 - **推荐流预筛**：X For You scope 更宽，进入 source resolution 和 ranking 前会先用快模型读取每条前 500 字，只保留 AI 模型、AI 产品、agent/devtools、ML research、AI infra、benchmark、AI 行业结构等相关内容
 - **按 canonical source 去重**：如果多条 tweet 指向同一个官方页面，会优先按最终 source URL 做重复惩罚，再退回文本级重复判断。主整理模型返回后还会再次校验：只保留 ID 与 source URL 都可信匹配的条目；若模型返回的是已知原帖 URL 或只差 `utm_*` / `ref` 等追踪参数，会纠正回采集到的 canonical URL，否则按原因丢弃。selection report 会记录丢弃计数、样例和 URL 纠正记录，方便回看低产出是否来自内容不足还是校验丢弃
 - **编辑偏好配置**：ranking 支持仓库内维护的作者级硬过滤名单和加权规则；当前默认对 `@tom_doerr` 做硬过滤，避免高频 GitHub 项目转发账号进入候选池；官号 `@openai` / `@anthropicai` 给 +8 加权，策展型可信作者 `@badlogicgames` 给 +6 加权（权重随可信作者增减手动调整）
 - **AI 双路径**：优先使用 `OPENAI_API_KEY`，未配置时自动切换到 ai-sdk 聚合商路径
 - **交互选择**：使用 `@inquirer/prompts` 的 checkbox，空格选中/取消，回车确认；每个候选项会显示来源、评分提示和最多 3 行摘要预览，便于人工决策
-- **偏好闭环**：人工 `select` 后会记录全候选的结构化特征、正负选择结果和排序/LLM 选择状态；不记录完整正文、HTML、cookie 或 token。历史统计只生成建议，必须通过 `npm run preferences:review` 人工确认后，才会反哺 X For You 预筛提示和 ranking 加降权
+- **两类偏好信号分离**：人工发布选择只表示“本期是否发布”；`评分过高/评分过低` 才表示分数方向。反馈优先归因到内容 Tag，可在证据支持时细化为受控 `custom:*` Tag。单事件最多调整一个 Tag 且绝对变化不超过 2；Ranking Signal 至少需要跨 2 个 run 的 3 个同方向事件
+- **模式差异待确认**：npm 继续使用外部模型、Substack reader brief 和 150 上限；Agent Skill 继续由当前 Agent 策展、不调用第三方 LLM、默认 pool 80。该差异本期不合并
 - **审阅包**：自动化模式会额外写出 `output/<date>-review.json` 和 `output/<date>-review.md`，供定时任务汇报和人工预读；如果跳过一天，下一次 09:00 review 会先追加新内容到同一份 pending draft。v1 不做隐藏自动精选，最终 6-10 条仍由人工复选决定
 - **图片输出**：最终 Obsidian Markdown 与 Substack HTML 会在摘要后插入来源中的图片
 - **固定分组**：发布输出按 `Product`、`Tutorial`、`Opinions/Thoughts` 三组组织，不再展示条目标签

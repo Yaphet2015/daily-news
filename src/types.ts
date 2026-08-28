@@ -1,4 +1,6 @@
-export type SourceName = 'twitter' | 'substack' | 'aihot';
+import type { SourceName } from './source-registry.js';
+
+export type { SourceName } from './source-registry.js';
 export type NewsCategory = 'Product' | 'Tutorial' | 'Opinions/Thoughts';
 export type RoundupMode = 'bullet_links';
 export type CollectedItemKind = 'substack_post' | 'substack_roundup_entry';
@@ -119,6 +121,55 @@ export interface ScoreBreakdown {
   penalties: number;
 }
 
+export type ContentTagId =
+  | 'topic:agents'
+  | 'topic:model-evaluation'
+  | 'topic:ai-infra'
+  | 'format:launch'
+  | 'format:tutorial'
+  | 'format:research'
+  | 'quality:evidence-rich'
+  | 'quality:vague'
+  | 'utility:actionable'
+  | 'pattern:vague-launch'
+  | `custom:${string}`;
+
+export type RankingSignalId =
+  | 'ranking:substance'
+  | 'ranking:evidence'
+  | 'ranking:freshness'
+  | 'ranking:novelty'
+  | 'ranking:actionability'
+  | 'ranking:engagement'
+  | 'ranking:source-credibility'
+  | 'ranking:x-article'
+  | 'ranking:substack-full-post'
+  | 'ranking:penalty';
+
+export type RankingSignalMap = Record<RankingSignalId, number>;
+
+export interface CustomContentTagDefinition {
+  id: `custom:${string}`;
+  label: string;
+  keywords: string[];
+}
+
+export interface ContentTagMatch {
+  tagId: ContentTagId;
+  matchedBy: string[];
+  strength: number;
+}
+
+export interface ScoreFactor {
+  factorId: ContentTagId | RankingSignalId;
+  kind: 'tag' | 'ranking-signal';
+  strength: number;
+  weight: number;
+  contribution: number;
+  evidence: string[];
+  provenance: 'baseline' | 'confirmed-overlay';
+}
+
 export interface RankedItem extends CollectedItem {
   editorialScore: number;
   engagementScore: number;
@@ -126,6 +177,11 @@ export interface RankedItem extends CollectedItem {
   scoreBreakdown: ScoreBreakdown;
   duplicateOf?: string;
   decisionReasons: string[];
+  contentTags?: ContentTagId[];
+  tagMatches?: ContentTagMatch[];
+  rankingSignals?: RankingSignalMap;
+  scoreFactors?: ScoreFactor[];
+  scoreFeedback?: ScoreFeedbackEntry;
   enteredCandidatePool?: boolean;
   selectedByLlm?: boolean;
   selectedByHuman?: boolean;
@@ -193,8 +249,105 @@ export interface FormatResult {
   date: string;
 }
 
+export type CurationMode = 'npm-model' | 'agent-curator';
+
+export interface ArtifactIdentity<Version extends number = 1> {
+  schemaVersion: Version;
+  runId: string;
+  date: string;
+  curationMode: CurationMode;
+  featureVersion: string;
+}
+
+export interface RankingArtifact extends ArtifactIdentity<1> {
+  collectedAt: number;
+  policyRevision: number;
+  rankedItems: RankedItem[];
+  candidateIds: string[];
+}
+
+export interface CurationArtifact extends ArtifactIdentity<1> {
+  collectedAt: number;
+  curationRevision: string;
+  curatedItems: CuratedItem[];
+  collectionWarnings?: string[];
+  curationDiagnostics?: CurationDiagnostics;
+}
+
+export type ScoreFeedbackDirection = 'too_high' | 'too_low';
+
+export interface ScoreFeedbackEntry {
+  direction: ScoreFeedbackDirection;
+  updatedAt: string;
+}
+
+export interface SelectionDecision extends ArtifactIdentity<1> {
+  curationRevision: string;
+  revision: number;
+  updatedAt: string;
+  selection: {
+    status: 'pending' | 'confirmed';
+    selectedIds: string[];
+    confirmedAt?: string;
+  };
+  scoreFeedbackById: Record<string, ScoreFeedbackEntry>;
+}
+
 export interface SelectionReport {
   date: string;
+  collectionWarnings?: string[];
+  curationDiagnostics?: CurationDiagnostics;
+  rankedItems: RankedItem[];
+  curatedItems: CuratedItem[];
+  selectedItems: CuratedItem[];
+}
+
+export interface FeedbackReviewItem {
+  id: string;
+  feedbackEventId: string;
+  direction: ScoreFeedbackDirection;
+  updatedAt: string;
+  text: string;
+  textPreview: string;
+  linkedSource?: LinkedSource;
+  contentTags: ContentTagId[];
+  tagMatches: ContentTagMatch[];
+  rankingSignals: RankingSignalMap;
+  scoreFactors: ScoreFactor[];
+  editorialScore: number;
+  engagementScore: number;
+  priorityScore: number;
+  selectedByLlm: boolean;
+  selectedByHuman: boolean;
+}
+
+export interface FeedbackReview extends ArtifactIdentity<1> {
+  curationRevision: string;
+  selectionDecisionRevision: number;
+  policyRevision: number;
+  items: FeedbackReviewItem[];
+}
+
+export interface ScoreFeedbackHistoryEvent extends ArtifactIdentity<1> {
+  feedbackEventId: string;
+  curationRevision: string;
+  selectionDecisionRevision: number;
+  policyRevision: number;
+  itemId: string;
+  direction: ScoreFeedbackDirection;
+  updatedAt: string;
+  textPreview: string;
+  contentTags: ContentTagId[];
+  tagMatches: ContentTagMatch[];
+  rankingSignals: RankingSignalMap;
+  scoreFactors: ScoreFactor[];
+}
+
+export interface CanonicalSelectionReport extends ArtifactIdentity<1> {
+  policyRevision: number;
+  curationRevision: string;
+  selectionDecisionRevision: number;
+  scoreFeedbackById: Record<string, ScoreFeedbackEntry>;
   collectionWarnings?: string[];
   curationDiagnostics?: CurationDiagnostics;
   rankedItems: RankedItem[];

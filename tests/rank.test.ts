@@ -17,6 +17,25 @@ function makeTwitterItem(overrides: Partial<CollectedItem> = {}): CollectedItem 
   };
 }
 
+test('rankItems persists content tags and applies a tag override once', () => {
+  const candidate = makeTwitterItem({
+    id: 'tagged',
+    text: 'A practical agent tutorial with API workflow details',
+  });
+  const base = rankItems([candidate])[0]!;
+  const boosted = rankItems([candidate], {
+    schemaVersion: 1,
+    updatedAt: '2026-08-27T00:00:00Z',
+    authorRules: {}, domainRules: {}, positiveTopicHints: [], negativeTopicHints: [],
+    tagWeightOverrides: { 'topic:agents': 2 },
+  } as Parameters<typeof rankItems>[1] & { tagWeightOverrides: { 'topic:agents': number } })[0]!;
+
+  assert.ok(base.contentTags?.includes('topic:agents'));
+  assert.ok(base.scoreFactors?.some((factor) => factor.factorId === 'ranking:substance'));
+  assert.equal(boosted.editorialScore, base.editorialScore + 2);
+  assert.equal(boosted.scoreFactors?.find((factor) => factor.factorId === 'topic:agents')?.contribution, 2);
+});
+
 test('rankItems prioritizes substantive evidence-backed items over promotional posts', () => {
   const ranked = rankItems([
     makeTwitterItem({

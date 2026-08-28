@@ -2,19 +2,11 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PendingDraft, SourceName } from './types.js';
+import { normalizeSourceNames } from './source-registry.js';
+import type { PendingDraft } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DRAFT_PATH = join(__dirname, '..', 'data', 'pending-draft.json');
-
-function normalizeEnabledSources(value: unknown): SourceName[] | null {
-  if (!Array.isArray(value)) return null;
-
-  const sources = value.filter(
-    (entry): entry is SourceName => entry === 'twitter' || entry === 'substack' || entry === 'aihot',
-  );
-  return sources.length === value.length ? Array.from(new Set(sources)) : null;
-}
 
 function normalizeStringArray(value: unknown): string[] | undefined {
   if (value == null) return undefined;
@@ -28,7 +20,7 @@ export function normalizePendingDraft(raw: unknown): PendingDraft | null {
 
   const candidate = raw as Record<string, unknown>;
   const collectedAt = candidate.collectedAt;
-  const enabledSources = normalizeEnabledSources(candidate.enabledSources);
+  const enabledSources = normalizeSourceNames(candidate.enabledSources);
   const collectionWarnings = normalizeStringArray(candidate.collectionWarnings);
   const items = candidate.items;
 

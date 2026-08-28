@@ -2,19 +2,21 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SOURCE_NAMES } from './source-registry.js';
+import type { SourceName } from './source-registry.js';
 import type { RunState } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = join(__dirname, '..', 'data', 'state.json');
 
+function buildSourceState(getLastPublishedTime: (source: SourceName) => number): RunState['sources'] {
+  return Object.fromEntries(
+    SOURCE_NAMES.map((source) => [source, { lastPublishedTime: getLastPublishedTime(source) }]),
+  ) as RunState['sources'];
+}
+
 function createEmptyState(): RunState {
-  return {
-    sources: {
-      twitter: { lastPublishedTime: 0 },
-      substack: { lastPublishedTime: 0 },
-      aihot: { lastPublishedTime: 0 },
-    },
-  };
+  return { sources: buildSourceState(() => 0) };
 }
 
 export function normalizeRunState(raw: unknown): RunState {
@@ -28,11 +30,7 @@ export function normalizeRunState(raw: unknown): RunState {
 
   if (typeof candidate.lastRunTime === 'number' && Number.isFinite(candidate.lastRunTime)) {
     return {
-      sources: {
-        twitter: { lastPublishedTime: candidate.lastRunTime },
-        substack: { lastPublishedTime: 0 },
-        aihot: { lastPublishedTime: 0 },
-      },
+      sources: buildSourceState((source) => source === 'twitter' ? candidate.lastRunTime as number : 0),
     };
   }
 
@@ -41,7 +39,7 @@ export function normalizeRunState(raw: unknown): RunState {
       ? (candidate.sources as Record<string, unknown>)
       : {};
 
-  const getLastPublishedTime = (source: 'twitter' | 'substack' | 'aihot'): number => {
+  const getLastPublishedTime = (source: SourceName): number => {
     const sourceState =
       sources[source] && typeof sources[source] === 'object'
         ? (sources[source] as Record<string, unknown>)
@@ -58,13 +56,7 @@ export function normalizeRunState(raw: unknown): RunState {
       : 0;
   };
 
-  return {
-    sources: {
-      twitter: { lastPublishedTime: getLastPublishedTime('twitter') },
-      substack: { lastPublishedTime: getLastPublishedTime('substack') },
-      aihot: { lastPublishedTime: getLastPublishedTime('aihot') },
-    },
-  };
+  return { sources: buildSourceState(getLastPublishedTime) };
 }
 
 export async function readState(statePath = STATE_PATH): Promise<RunState> {

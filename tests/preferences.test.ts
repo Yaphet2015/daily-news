@@ -9,10 +9,23 @@ import {
   buildPreferenceEventFromSelectionReport,
   buildPreferenceProfile,
   getPreferenceRuleAdjustment,
+  normalizeConfirmedPreferenceRules,
   readConfirmedPreferenceRules,
   writeConfirmedPreferenceRules,
 } from '../src/preferences.js';
 import type { SelectionReport } from '../src/types.js';
+
+test('confirmed rules preserve tag and ranking signal overlays', () => {
+  const rules = normalizeConfirmedPreferenceRules({
+    schemaVersion: 1,
+    policyRevision: 4,
+    tagWeightOverrides: { 'topic:agents': 2 },
+    rankingSignalWeightOverrides: { 'ranking:evidence': 1.5 },
+  });
+  assert.equal(rules.policyRevision, 4);
+  assert.deepEqual(rules.tagWeightOverrides, { 'topic:agents': 2 });
+  assert.deepEqual(rules.rankingSignalWeightOverrides, { 'ranking:evidence': 1.5 });
+});
 
 function makeReport(overrides: Partial<SelectionReport> = {}): SelectionReport {
   return {
@@ -45,6 +58,7 @@ function makeReport(overrides: Partial<SelectionReport> = {}): SelectionReport {
           penalties: 0,
         },
         decisionReasons: ['高信息密度', '实践教程'],
+        contentTags: ['topic:agents'],
         enteredCandidatePool: true,
         selectedByLlm: true,
         selectedByHuman: true,
@@ -74,6 +88,7 @@ function makeReport(overrides: Partial<SelectionReport> = {}): SelectionReport {
           penalties: -8,
         },
         decisionReasons: ['低质量内容', '弱证据'],
+        contentTags: ['quality:vague'],
         enteredCandidatePool: true,
         selectedByLlm: true,
         selectedByHuman: false,
@@ -147,6 +162,7 @@ test('buildPreferenceEventFromSelectionReport records every ranked candidate wit
     ],
   );
   assert.equal(event.items[0]?.summaryPreview, 'Apple 开源了 Core AI Models，提供可复用的端侧 AI 开发组件。');
+  assert.deepEqual(event.items[0]?.contentTags, ['topic:agents']);
   assert.ok((event.items[0]?.textPreview.length ?? 0) <= 240);
   assert.equal(JSON.stringify(event).includes('body must not be copied'), false);
   assert.equal(JSON.stringify(event).includes('html must not be copied'), false);
@@ -248,6 +264,16 @@ test('confirmed preference rules are readable and produce item adjustments', asy
   assert.deepEqual(boosted.reasons, ['偏好作者:historically selected']);
   assert.equal(penalized.penalty, 6);
   assert.deepEqual(penalized.reasons, ['偏好域名:historically rejected']);
+});
+
+test('recordPreferenceHistoryFromSelectionReport is idempotent when runId is provided', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'daily-news-preferences-'));
+  const path = join(tempDir, 'history.jsonl');
+  const report = makeReport();
+  const { recordPreferenceHistoryFromSelectionReport } = await import('../src/preferences.js');
+  await recordPreferenceHistoryFromSelectionReport(report, { runId: 'run-a' }, path);
+  await recordPreferenceHistoryFromSelectionReport(report, { runId: 'run-a' }, path);
+  assert.equal((await readFile(path, 'utf-8')).trim().split('\n').length, 1);
 });
 
 test('appendPreferenceHistoryEvent writes JSONL events', async () => {

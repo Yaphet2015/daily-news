@@ -1,5 +1,12 @@
 import type { CollectedItem, RankedItem, ScoreBreakdown } from './types.js';
 import {
+  buildScoreFactors,
+  matchContentTags,
+  resolveEffectiveScoringPolicy,
+  toRankingSignals,
+  type EffectiveScoringPolicy,
+} from './scoring-policy.js';
+import {
   getPreferenceRuleAdjustment,
   normalizeConfirmedPreferenceRules,
   type ConfirmedPreferenceRules,
@@ -205,21 +212,6 @@ function computeEditorialBreakdown(
   };
 }
 
-function toEditorialScore(breakdown: ScoreBreakdown): number {
-  const raw =
-    breakdown.substance +
-    breakdown.evidence +
-    breakdown.sourceSignal +
-    breakdown.xArticleBonus +
-    breakdown.substackSourceBonus +
-    breakdown.freshness +
-    breakdown.novelty +
-    breakdown.actionability +
-    breakdown.penalties;
-
-  return clamp(raw, 0, 100);
-}
-
 function computeEngagementScore(item: CollectedItem, breakdown: ScoreBreakdown): { score: number; reason?: string } {
   if (item.source !== 'twitter') return { score: 0 };
 
@@ -275,7 +267,33 @@ function buildDecisionReasons(
   return Array.from(new Set(reasons));
 }
 
-function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
+function buildStructuredScore(
+  item: CollectedItem,
+  breakdown: ScoreBreakdown,
+  engagementScore: number,
+  policy: EffectiveScoringPolicy,
+) {
+  const rankingSignals = toRankingSignals(breakdown, engagementScore);
+  const tagMatches = matchContentTags(item, rankingSignals, policy);
+  const scoreFactors = buildScoreFactors(rankingSignals, tagMatches, policy);
+  const editorialScore = clamp(scoreFactors
+    .filter((factor) => factor.factorId !== 'ranking:engagement')
+    .reduce((sum, factor) => sum + factor.contribution, 0), 0, 100);
+  return {
+    rankingSignals,
+    tagMatches,
+    contentTags: tagMatches.map((match) => match.tagId),
+    scoreFactors,
+    editorialScore,
+    priorityScore: clamp(Math.round(editorialScore * 0.75 + engagementScore * 0.25), 0, 100),
+  };
+}
+
+function recomputeStructuredScore(item: RankedItem, policy: EffectiveScoringPolicy): void {
+  Object.assign(item, buildStructuredScore(item, item.scoreBreakdown, item.engagementScore, policy));
+}
+
+function applyDuplicatePenalties(items: RankedItem[], policy: EffectiveScoringPolicy): RankedItem[] {
   const byCanonicalUrl = new Map<string, RankedItem[]>();
   for (const item of items) {
     const group = byCanonicalUrl.get(item.url) ?? [];
@@ -295,8 +313,7 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
         ?.slice('互动支持:'.length);
       item.duplicateOf = primary.id;
       item.scoreBreakdown.novelty = 0;
-      item.editorialScore = toEditorialScore(item.scoreBreakdown);
-      item.priorityScore = clamp(Math.round(item.editorialScore * 0.75 + item.engagementScore * 0.25), 0, 100);
+      recomputeStructuredScore(item, policy);
       item.decisionReasons = buildDecisionReasons(
         item,
         item.scoreBreakdown,
@@ -330,8 +347,7 @@ function applyDuplicatePenalties(items: RankedItem[]): RankedItem[] {
       const isPromotional = item.decisionReasons.includes('宣发内容');
       item.duplicateOf = primary.id;
       item.scoreBreakdown.novelty = 0;
-      item.editorialScore = toEditorialScore(item.scoreBreakdown);
-      item.priorityScore = clamp(Math.round(item.editorialScore * 0.75 + item.engagementScore * 0.25), 0, 100);
+      recomputeStructuredScore(item, policy);
       item.decisionReasons = buildDecisionReasons(
         item,
         item.scoreBreakdown,
@@ -363,22 +379,21 @@ export function rankItems(
     return Number.isFinite(published) ? Math.max(latest, published) : latest;
   }, 0);
 
+  const policy = resolveEffectiveScoringPolicy(preferenceRules);
   const ranked = eligibleItems.map((item) => {
     const normalizedText = normalizeText(item.text);
     const isPromotional = countKeywordHits(normalizedText, PROMOTIONAL_KEYWORDS) > 0;
     const preferenceAdjustment = getPreferenceRuleAdjustment(item, preferenceRules);
     const scoreBreakdown = computeEditorialBreakdown(item, newestTimestamp, preferenceAdjustment);
-    const editorialScore = toEditorialScore(scoreBreakdown);
     const { score: engagementScore, reason: engagementReason } = computeEngagementScore(item, scoreBreakdown);
     const { reason: authorReason } = getAuthorAdjustment(item);
-    const priorityScore = clamp(Math.round(editorialScore * 0.75 + engagementScore * 0.25), 0, 100);
+    const structured = buildStructuredScore(item, scoreBreakdown, engagementScore, policy);
 
     return {
       ...item,
       scoreBreakdown,
-      editorialScore,
       engagementScore,
-      priorityScore,
+      ...structured,
       decisionReasons: buildDecisionReasons(
         item,
         scoreBreakdown,
@@ -391,7 +406,7 @@ export function rankItems(
     };
   });
 
-  return applyDuplicatePenalties(ranked);
+  return applyDuplicatePenalties(ranked, policy);
 }
 
 export function getCandidatePoolSize(totalItems: number): number {

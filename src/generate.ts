@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
+import { createRunId, FEATURE_VERSION } from './artifact-identity.js';
 import { select as promptSelect } from '@inquirer/prompts';
 import { collect, diagnoseCollectEnvironment } from './collect.js';
 import { attachReaderBriefs, curateWithDiagnostics, formatCurationDiagnosticsSummary } from './curate.js';
+import { createCurationArtifact, writeCurationArtifact as persistCurationArtifact } from './curation-artifact.js';
 import { clearPendingDraft, readPendingDraft, writePendingDraft } from './draft.js';
 import {
   logEnvironmentDiagnostics,
@@ -13,6 +15,8 @@ import { applyProxyFromEnv } from './proxy.js';
 import { publish } from './publish.js';
 import { readConfirmedPreferenceRules, recordPreferenceHistoryFromSelectionReport } from './preferences.js';
 import { rankItems, selectCandidatePool } from './rank.js';
+import { writeRankingArtifact as persistRankingArtifact } from './ranking-artifact.js';
+import { finalizePublication } from './publication-workflow.js';
 import { writeReviewPacket } from './review.js';
 import { select } from './select.js';
 import { readState, writeState } from './state.js';
@@ -20,10 +24,12 @@ import type {
   CollectionSnapshot,
   CollectedItem,
   CurateResult,
+  CurationArtifact,
   CuratedItem,
   CurationDiagnostics,
   PendingDraft,
   RankedItem,
+  RankingArtifact,
   ReviewPacket,
   ReviewPacketPaths,
   RunState,
@@ -55,6 +61,9 @@ interface GenerateDeps {
   recordPreferenceHistory: (report: SelectionReport) => Promise<void>;
   publish: (result: ReturnType<typeof format>, report?: SelectionReport) => Promise<void>;
   writeReviewPacket: (packet: ReviewPacket) => Promise<ReviewPacketPaths>;
+  writeRankingArtifact: (artifact: RankingArtifact) => Promise<void>;
+  writeCurationArtifact: (artifact: CurationArtifact) => Promise<void>;
+  getPolicyRevision: () => number;
   shouldLogEnvironmentDiagnostics: () => boolean;
   logEnvironmentDiagnostics: () => Promise<void>;
   diagnoseCollectEnvironment: () => Promise<void>;
@@ -88,29 +97,14 @@ function createGenerateDeps(): GenerateDeps {
     recordPreferenceHistory: async () => {},
     publish,
     writeReviewPacket,
+    writeRankingArtifact: async () => {},
+    writeCurationArtifact: async () => {},
+    getPolicyRevision: () => readConfirmedPreferenceRules().policyRevision ?? 1,
     shouldLogEnvironmentDiagnostics,
     logEnvironmentDiagnostics,
     diagnoseCollectEnvironment,
     log: console.log,
   };
-}
-
-function advancePublishedState(state: RunState, sources: string[], collectedAt: number): RunState {
-  const nextState: RunState = {
-    sources: {
-      twitter: { lastPublishedTime: state.sources.twitter.lastPublishedTime },
-      substack: { lastPublishedTime: state.sources.substack.lastPublishedTime },
-      aihot: { lastPublishedTime: state.sources.aihot.lastPublishedTime },
-    },
-  };
-
-  for (const source of sources) {
-    if (source === 'twitter' || source === 'substack' || source === 'aihot') {
-      nextState.sources[source] = { lastPublishedTime: collectedAt };
-    }
-  }
-
-  return nextState;
 }
 
 function createAppendCollectionState(draft: PendingDraft): RunState {
@@ -204,25 +198,6 @@ function normalizeCurateResult(result: CuratedItem[] | CurateResult): { items: C
   }
 
   return result;
-}
-
-function buildSelectionReport(
-  date: string,
-  collectionWarnings: string[] | undefined,
-  rankedItems: RankedItem[],
-  candidateItems: CollectedItem[],
-  curatedItems: CuratedItem[],
-  selectedItems: CuratedItem[],
-  curationDiagnostics?: CurationDiagnostics,
-): SelectionReport {
-  return {
-    date,
-    ...(collectionWarnings && collectionWarnings.length > 0 ? { collectionWarnings } : {}),
-    curationDiagnostics,
-    rankedItems: annotateRankedItems(rankedItems, candidateItems, curatedItems, selectedItems),
-    curatedItems,
-    selectedItems,
-  };
 }
 
 function buildReviewPacket(
@@ -328,6 +303,20 @@ export async function runGenerate(
   const rankedItems = deps.rankItems(enrichedCollectedItems);
   const candidateItems = deps.selectCandidatePool(rankedItems);
   const curatedInputItems = mergeForcedSelectItems(candidateItems, rankedItems);
+  const date = formatDateFromUnixSeconds(snapshot.collectedAt);
+  const ranking: RankingArtifact = {
+    schemaVersion: 1,
+    runId: createRunId({ collectedAt: snapshot.collectedAt, enabledSources: snapshot.enabledSources,
+      itemIds: snapshot.items.map((item) => item.id) }),
+    date,
+    curationMode: 'npm-model',
+    featureVersion: FEATURE_VERSION,
+    collectedAt: snapshot.collectedAt,
+    policyRevision: deps.getPolicyRevision(),
+    rankedItems,
+    candidateIds: curatedInputItems.map((item) => item.id),
+  };
+  await deps.writeRankingArtifact(ranking);
   const curateResult = normalizeCurateResult(await deps.curate(curatedInputItems));
   const curatedItems = curateResult.items;
   if (curatedItems.length === 0) {
@@ -337,6 +326,9 @@ export async function runGenerate(
     deps.log('AI 未整理出任何资讯，本次运行结束。');
     return;
   }
+  const curation = createCurationArtifact({ ranking, curatedItems,
+    collectionWarnings: snapshot.collectionWarnings, curationDiagnostics: curateResult.diagnostics });
+  await deps.writeCurationArtifact(curation);
 
   if (mode === 'review') {
     const packet = buildReviewPacket(snapshot, rankedItems, candidateItems, curatedItems, curateResult.diagnostics);
@@ -348,21 +340,29 @@ export async function runGenerate(
   }
 
   const selectedItems = await deps.select(curatedItems);
-  const formatted = deps.format(selectedItems, formatDateFromUnixSeconds(snapshot.collectedAt));
-  const report = buildSelectionReport(
-    formatted.date,
-    snapshot.collectionWarnings,
-    rankedItems,
-    candidateItems,
-    curatedItems,
-    selectedItems,
-    curateResult.diagnostics,
-  );
-
-  await deps.recordPreferenceHistory(report);
-  await deps.publish(formatted, report);
-  await deps.writeState(advancePublishedState(publishedState, snapshot.enabledSources, snapshot.collectedAt));
-  await deps.clearDraft();
+  const now = new Date().toISOString();
+  const decision = {
+    schemaVersion: 1 as const,
+    runId: ranking.runId,
+    date: ranking.date,
+    curationMode: ranking.curationMode,
+    featureVersion: ranking.featureVersion,
+    curationRevision: curation.curationRevision,
+    revision: 1,
+    updatedAt: now,
+    selection: { status: 'confirmed' as const, selectedIds: selectedItems.map((item) => item.id), confirmedAt: now },
+    scoreFeedbackById: {},
+  };
+  await finalizePublication({ draft: snapshot, ranking, curation, decision }, {
+    readState: async () => publishedState,
+    formatSelection: deps.format,
+    writePublicationOutputs: (formatted, report) => deps.publish(formatted, report),
+    recordSelectionHistory: deps.recordPreferenceHistory,
+    recordScoreFeedbackHistory: async () => {},
+    writeFeedbackReview: async () => {},
+    writeState: deps.writeState,
+    clearDraft: deps.clearDraft,
+  });
 
   deps.log('\n✅  全部完成！');
 }
@@ -377,6 +377,8 @@ async function main(): Promise<void> {
           reportPath: `output/${report.date}-selection-report.json`,
         });
       },
+      writeRankingArtifact: async (artifact) => { await persistRankingArtifact(artifact); },
+      writeCurationArtifact: async (artifact) => { await persistCurationArtifact(artifact); },
     },
     parseGenerateOptions(process.argv.slice(2)),
   );

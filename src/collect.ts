@@ -11,6 +11,8 @@ import {
   readConfirmedPreferenceRules,
   type ConfirmedPreferenceRules,
 } from './preferences.js';
+import { DEFAULT_ENABLED_SOURCES, normalizeSourceNames } from './source-registry.js';
+import type { SourceName } from './source-registry.js';
 import type {
   CollectionSnapshot,
   CollectedItem,
@@ -21,7 +23,6 @@ import type {
   RunState,
   SelfThread,
   SelfThreadPart,
-  SourceName,
   SourceResolution,
 } from './types.js';
 
@@ -3061,7 +3062,7 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
   return {
     items: sortNewestFirst(resolved),
     warnings: quoteWarning
-      ? [...recommendationResult.warnings, quoteWarning]
+      ? [...(recommendationResult.warnings ?? []), quoteWarning]
       : recommendationResult.warnings,
   };
 }
@@ -3262,16 +3263,17 @@ export async function collectSources({
   };
 }
 
-function parseEnabledSources(): SourceName[] {
-  const raw = process.env.ENABLED_SOURCES ?? 'twitter,aihot';
-  const sources = raw
-    .split(',')
-    .map((value) => value.trim())
-    .filter(
-      (value): value is SourceName => value === 'twitter' || value === 'substack' || value === 'aihot',
-    );
+export function parseEnabledSources(value = process.env.ENABLED_SOURCES): SourceName[] {
+  if (value == null || value.trim() === '') return [...DEFAULT_ENABLED_SOURCES];
 
-  return sources.length > 0 ? Array.from(new Set(sources)) : ['twitter', 'aihot'];
+  const requested = value.split(',').map((source) => source.trim()).filter(Boolean);
+  const sources = normalizeSourceNames(requested);
+  if (!sources) {
+    const unsupported = requested.filter((source) => !normalizeSourceNames([source]));
+    throw new Error(`Unsupported ENABLED_SOURCES: ${unsupported.join(', ')}`);
+  }
+
+  return sources.length > 0 ? sources : [...DEFAULT_ENABLED_SOURCES];
 }
 
 export async function diagnoseCollectEnvironment({

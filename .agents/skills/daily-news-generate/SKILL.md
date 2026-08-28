@@ -30,8 +30,9 @@ destroying it. Run `status` any time to see where you are (e.g. when resuming an
 | `curate-apply` | Enrich **your** `output/<date>-curate-output.json` into `output/<date>-curation.json`. |
 | `select-start [--force]` | **Preferred.** Launch the select server **detached** (survives the turn boundary), **auto-open the default browser**, write `output/<date>-select.pid` + `select.log`, then **return immediately** (the agent is NOT blocking). Server self-exits on confirm. |
 | `select-stop` | Stop the detached server from `select.pid` (SIGTERM→SIGKILL) and remove the pidfile. **Always run after `publish`.** Idempotent. |
-| `select [--force]` | Legacy: serve the HTML on a **stable** port (default 8427, override `DAILY_NEWS_SELECT_PORT`) and **block** until the user confirms, writing `output/<date>-selection.json`. Do not use as the agent — it keeps you working and dies when aborted (see stage 5). |
-| `publish` | Format + publish files, advance `data/state.json`, clear the draft. |
+| `select [--force]` | Legacy foreground HTML server. Selection and score feedback persist to `output/<date>-selection-decision.json`. |
+| `publish` | Publish from canonical ranking/curation/decision artifacts, record feedback, advance state, clear draft. |
+| `feedback-apply --date=YYYY-MM-DD` | Validate the Agent-authored adjustment and atomically update `data/preference-rules.json`. |
 
 ## Hard rules
 
@@ -61,12 +62,13 @@ data/state.json ── lastPublishedTime per source (advances ONLY on successful
 data/pending-draft.json ── collected snapshot (the anchor; cleared ONLY on successful publish)
 
 collect      → data/pending-draft.json
-curate-input → output/<date>-curate-input.json   (candidate pool for you)
-YOU curate   → output/<date>-curate-output.json   (you write this — see below)
-curate-apply → output/<date>-curation.json        (enriched CuratedItem[])
-select       → output/<date>-select.html  +  output/<date>-selection.json
-publish      → output/<date>-substack.html , output/<date>-selection-report.json , Obsidian file
+curate-input → output/<date>-ranking.json + output/<date>-curate-input.json
+YOU curate   → output/<date>-curate-output.json
+curate-apply → output/<date>-curation.json
+select       → output/<date>-select.html + output/<date>-selection-decision.json
+publish      → selection-report.json + score-feedback-history.jsonl + optional feedback-review.json
               then advances state.json and clears pending-draft.json
+Agent review → output/<date>-feedback-adjustment.json → feedback-apply → data/preference-rules.json
 ```
 
 ### 1. collect
@@ -150,47 +152,38 @@ items with bad ids/urls or duplicates, and writes `output/<date>-curation.json` 
 curated items or many rejections, inspect: usually a copied-id or copied-url mistake in your `curate-output.json`.
 
 ### 5. select (user, via HTML — non-blocking)
-The select server binds a **stable** port (default 8427, override `DAILY_NEWS_SELECT_PORT`), persists ticks to
-`localStorage` (keyed by date) so a reload never loses selections, and **self-exits** after writing the selection
-file. The confirm endpoint is `serverOrigin + '/select'` POST `{date, selectedIds}`.
 
-**Use `select-start` (detached) — do NOT hold a blocking `select`.** A foreground blocking `select` keeps you in a
-"working" state, so the user cannot steer mid-selection; and when it is aborted (timeout, or the user's next
-message arriving) the server dies and 确认发布 fails with "Failed to fetch". The detached server sidesteps both:
-its process is in a new session (not reaped when your turn ends), you are free to be steered, and the browser
-opens itself.
+Use `select-start`, then end the turn. The HTML keeps publication checkboxes separate from score feedback. Each
+item has `评分过高` and `评分过低`; the buttons are mutually exclusive and clicking the active direction revokes it.
+Every click is immediately and atomically saved to `output/<date>-selection-decision.json`. The file is SSOT.
+`localStorage` only caches checkbox state under `daily-news-select:<runId>:<curationRevision>`.
 
-1. Run `select-start` as a foreground Bash call (it returns in ~2–3s). It spawns the server **detached**,
-   **auto-opens the default browser** to the page, writes `output/<date>-select.pid` + `output/<date>-select.log`,
-   waits for `/health`, then prints `SELECT_URL=`, `SERVER_PID_FILE=`, `SERVER_LOG=`, `SELECTION_FILE=`. Set
-   `DAILY_NEWS_SELECT_OPEN_BROWSER=0` to suppress the auto-open (headless/CI).
-2. **End your turn**: tell the user the page is open, to choose **6–10** items, click 确认发布, and then tell you to
-   publish. You are NOT blocking — the user can steer freely; their ticks persist in `localStorage` across reloads.
-3. When the user confirms, the server writes `output/<date>-selection.json` and exits on its own.
-4. On the user's next message, verify `output/<date>-selection.json` exists, run `publish`, **then run `select-stop`**
-   to clean up the detached server (idempotent — safe even if it already self-exited on confirm). Always run
-   `select-stop` after `publish` so no detached server lingers.
+The feedback endpoint validates run identity and item ID. Selection and score feedback are independent: selected
+or unselected never implies a score direction. After confirmation, verify `selection-decision.json`, run `publish`,
+then run `select-stop`. Legacy `selection.json` is only a derived compatibility file and is not publish input.
 
-`select-stop` stops the server from `select.pid` (SIGTERM→SIGKILL) and removes the pidfile. If the draft was already
-cleared (post-publish), it scans `output/*-select.pid` for the most recent one.
+### 6. publish and post-publish score review
 
-If the browser can't reach the page, the user's proxy is likely intercepting `127.0.0.1` — have them add
-`127.0.0.1`/`localhost` to the proxy bypass list, then re-open (or re-run `select-start`, which refocuses the tab).
+Run `publish` after the canonical decision is confirmed. Publish consumes the persisted ranking; it never reranks.
+It writes the selection report and idempotent histories before advancing state or clearing the draft.
 
-**Escape hatch:** the user may interrupt and paste their picks (by title/number from the curation, or raw ids from
-`localStorage`). Resolve the ids against `output/<date>-curation.json`, write `output/<date>-selection.json` directly
-as `{date, selectedItems}` (same shape the server writes), run `publish`, then run `select-stop` if a server is
-running.
+If publish prints `本期无评分反馈`, do not create an adjustment. Otherwise it writes
+`output/<date>-feedback-review.json`. Continue the same workflow:
 
-Legacy `select` (foreground; blocks until confirm) still exists for direct/test use — do not use it as the agent.
+1. Read the review and its feedback evidence.
+2. Attribute the mismatch to the **smallest content Tag** or Ranking Signal. Do not default to author/domain.
+3. Prefer one existing matched Tag. If it is too broad, define one controlled `custom:*` Tag with content keywords.
+4. With one event, adjust at most one Tag by at most 2 points. Never adjust a Ranking Signal from one event.
+5. A global Ranking Signal requires 3 same-direction events across at least 2 runs.
+6. If evidence conflicts or is insufficient, write `no_change` with a reason.
+7. Never modify author/domain rules, source enablement, or the `@tom_doerr` hard filter.
+8. Write `output/<date>-feedback-adjustment.json`, then run `feedback-apply --date=<date>`.
+9. Report the before/after policy revision, evidence IDs, changed Tag/Signal IDs, and expected next-run effect.
 
-### 6. publish (you complete it)
-Run `publish` once `output/<date>-selection.json` exists. It formats the selection, writes
-`output/<date>-substack.html`, `output/<date>-selection-report.json`, and the Obsidian file (when
-`OBSIDIAN_VAULT_PATH` is set), records preference history, advances `data/state.json`, and clears the draft.
+The Agent provides semantic attribution. `feedback-apply` is the only validator and writer. It rejects broad or
+unsupported changes and atomically updates `data/preference-rules.json`.
 
 ## Reporting
 
-After `publish`, report: date, selected count, the substack draft path, the selection-report path, and that state
-was advanced + draft cleared. If a run fails, run `diagnose` when it looks environment/proxy/Twitter/cwd/PATH/
-dependency related; otherwise report the failing stage and the exact error. Run `status` first whenever resuming.
+After publish and any feedback apply, report date, selected count, artifact paths, feedback count, adjustment
+status, and policy revision. If any stage fails, report the exact stage and error; do not claim completion.

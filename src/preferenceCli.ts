@@ -36,6 +36,7 @@ function applySelectedSuggestions(
   suggestions: Awaited<ReturnType<typeof updatePreferenceProfileFromReports>>['profile']['suggestions'],
 ): ConfirmedPreferenceRules {
   const next: ConfirmedPreferenceRules = {
+    ...currentRules,
     schemaVersion: 1,
     updatedAt: new Date().toISOString(),
     authorRules: { ...currentRules.authorRules },

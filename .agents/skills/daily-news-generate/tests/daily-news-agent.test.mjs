@@ -5,16 +5,15 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  advancePublishedState,
-  annotateRankedItems,
+  buildAgentRankingArtifact,
   buildSelectHtml,
-  buildSelectionReport,
   mergeForcedSelectItems,
   parseCliArgs,
   resolveRepoRoot,
   resolveSelectPort,
   resolveSelection,
   runPublish,
+  runStatus,
   trimCandidatePool,
   validatePreflight,
   findMostRecentSelectPid,
@@ -33,7 +32,11 @@ async function makeTempRepo() {
     '{"name":"tsx","exports":{".":"./dist/loader.mjs"}}',
   );
   await writeFile(join(repo, 'node_modules', 'tsx', 'dist', 'loader.mjs'), 'export {}');
-  for (const name of ['collect', 'curate', 'draft', 'envDiagnostics', 'format', 'preferences', 'proxy', 'publish', 'rank', 'state']) {
+  for (const name of [
+    'artifact-identity', 'collect', 'curate', 'curation-artifact', 'draft', 'envDiagnostics', 'feedbackCli', 'format',
+    'preferences', 'proxy', 'publish', 'publication-workflow', 'rank', 'ranking-artifact',
+    'score-feedback-history', 'selection-decision', 'selection-decision-store', 'source-registry', 'state',
+  ]) {
     await writeFile(join(repo, 'src', `${name}.ts`), 'export {};');
   }
   return repo;
@@ -49,6 +52,9 @@ test('parseCliArgs defaults to collect, captures flags, rejects unknown stages',
   assert.deepEqual(parseCliArgs(['select-start']), { command: 'select-start', resume: false, discard: false, force: false });
   assert.deepEqual(parseCliArgs(['select-start', '--force']), { command: 'select-start', resume: false, discard: false, force: true });
   assert.deepEqual(parseCliArgs(['select-stop']), { command: 'select-stop', resume: false, discard: false, force: false });
+  assert.deepEqual(parseCliArgs(['feedback-apply', '--date=2026-08-27']), {
+    command: 'feedback-apply', resume: false, discard: false, force: false, date: '2026-08-27',
+  });
   assert.equal(parseCliArgs(['--help']).command, 'help');
   assert.throws(() => parseCliArgs(['review']), /Unsupported daily-news agent command/);
 });
@@ -87,11 +93,21 @@ test('validatePreflight reports only the modules this engine imports, and never 
 
 // ───────────────────────── deterministic helpers ─────────────────────────
 
-test('advancePublishedState advances only the enabled sources to collectedAt', () => {
-  const state = { sources: { twitter: { lastPublishedTime: 100 }, substack: { lastPublishedTime: 200 } } };
-  const next = advancePublishedState(state, ['twitter'], 999);
-  assert.equal(next.sources.twitter.lastPublishedTime, 999);
-  assert.equal(next.sources.substack.lastPublishedTime, 200); // untouched
+test('buildAgentRankingArtifact records the exact curator pool', () => {
+  const draft = { collectedAt: 100, enabledSources: ['twitter', 'aihot'], items: [{ id: 'a' }, { id: 'b' }] };
+  const rankedItems = [{ id: 'a', priorityScore: 2 }, { id: 'b', priorityScore: 1 }];
+  const artifact = buildAgentRankingArtifact({
+    draft,
+    rankedItems,
+    candidateItems: [rankedItems[1]],
+    date: '2026-08-27',
+    policyRevision: 3,
+    createRunId: () => 'run-a',
+    featureVersion: 'tag-signal-feedback-v1',
+  });
+  assert.equal(artifact.runId, 'run-a');
+  assert.deepEqual(artifact.candidateIds, ['b']);
+  assert.equal(artifact.policyRevision, 3);
 });
 
 test('mergeForcedSelectItems appends each forceSelect item once, without duplicates', () => {
@@ -124,38 +140,6 @@ test('resolveSelection preserves curated order, rejects unknown ids, dedupes', (
   assert.throws(() => resolveSelection(curation, '1'), /selectedIds must be an array/);
 });
 
-test('buildSelectionReport annotates candidate/curated/selected membership and omits empty warnings', () => {
-  const rankedItems = [{ id: '1', priorityScore: 50 }, { id: '2', priorityScore: 40 }, { id: '3', priorityScore: 30 }];
-  const report = buildSelectionReport({
-    date: '2026-07-08',
-    collectionWarnings: [],
-    rankedItems,
-    candidateItems: [{ id: '1' }, { id: '2' }],
-    curatedItems: [{ id: '1' }],
-    selectedItems: [{ id: '1' }],
-    curationDiagnostics: { rejectedCount: 0 },
-  });
-
-  assert.equal(report.collectionWarnings, undefined);
-  const byId = new Map(report.rankedItems.map((i) => [i.id, i]));
-  assert.equal(byId.get('1').enteredCandidatePool, true);
-  assert.equal(byId.get('1').selectedByLlm, true);
-  assert.equal(byId.get('1').selectedByHuman, true);
-  assert.equal(byId.get('2').enteredCandidatePool, true);
-  assert.equal(byId.get('2').selectedByLlm, false);
-  assert.equal(byId.get('3').enteredCandidatePool, false);
-  assert.equal(report.selectedItems.length, 1);
-  assert.deepEqual(report.curationDiagnostics, { rejectedCount: 0 });
-});
-
-// annotateRankedItems is the engine behind buildSelectionReport's annotations.
-test('annotateRankedItems marks selectedByHuman only when a selection is provided', () => {
-  const annotated = annotateRankedItems([{ id: '1' }], [{ id: '1' }], [{ id: '1' }], [{ id: '1' }]);
-  assert.equal(annotated[0].selectedByHuman, true);
-  const noSelection = annotateRankedItems([{ id: '1' }], [{ id: '1' }], [{ id: '1' }]);
-  assert.equal(noSelection[0].selectedByHuman, undefined);
-});
-
 // ───────────────────────── detached select cleanup ─────────────────────────
 
 test('findMostRecentSelectPid locates the latest output/*-select.pid by date (post-publish cleanup)', async () => {
@@ -182,7 +166,7 @@ test('findMostRecentSelectPid locates the latest output/*-select.pid by date (po
 
 test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every curated item', () => {
   const curation = {
-    date: '2026-07-08',
+    date: '2026-07-08', runId: 'run-a', curationRevision: 'curation-a',
     collectionWarnings: ['recommendation feed skipped'],
     curatedItems: [
       { id: '1', title: 'T1', summary: 'S1', category: 'Product', source: 'twitter', attribution: '@a', url: 'https://x.com/1', media: [] },
@@ -203,7 +187,12 @@ test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every 
   assert.match(html, /localStorage/);
   assert.match(html, /restoreSelection/);
   assert.match(html, /saveSelection/);
-  assert.match(html, /daily-news-select-/);
+  assert.match(html, /daily-news-select:/);
+  assert.match(html, /评分过高/);
+  assert.match(html, /评分过低/);
+  assert.match(html, /serverOrigin\+'\/feedback'/);
+  assert.match(html, /"runId":"run-a"/);
+  assert.match(html, /"curationRevision":"curation-a"/);
 });
 
 test('resolveSelectPort honors DAILY_NEWS_SELECT_PORT, falls back to the default, and validates', () => {
@@ -216,7 +205,59 @@ test('resolveSelectPort honors DAILY_NEWS_SELECT_PORT, falls back to the default
   assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '1.5' }), /Invalid DAILY_NEWS_SELECT_PORT/);
 });
 
+test('status lists canonical feedback artifacts and every source cursor', async () => {
+  const repo = await makeTempRepo();
+  const draft = { collectedAt: 1_783_476_198, enabledSources: ['twitter', 'aihot'], items: [{ id: '1' }] };
+  await writeFile(join(repo, 'output', '2026-07-08-ranking.json'), '{}');
+  await writeFile(join(repo, 'output', '2026-07-08-selection-decision.json'), '{}');
+  const status = await runStatus({ pipeline: {
+    draftModule: { readPendingDraft: async () => draft },
+    stateModule: { readState: async () => ({ sources: { twitter: { lastPublishedTime: 1 },
+      substack: { lastPublishedTime: 2 }, aihot: { lastPublishedTime: 3 } } }) },
+    sourceRegistryModule: { formatPublishedCursorStatus: (state) =>
+      `Twitter=${state.sources.twitter.lastPublishedTime}, Substack=${state.sources.substack.lastPublishedTime}, AI HOT=${state.sources.aihot.lastPublishedTime}` },
+  }, repoRoot: repo, log: () => {} });
+  assert.match(status, /ranking\.json/);
+  assert.match(status, /selection-decision\.json/);
+  assert.match(status, /AI HOT=3/);
+  await rm(repo, { recursive: true, force: true });
+});
+
 // ───────────────────────── publish wiring (fake pipeline) ─────────────────────────
+
+test('runPublish consumes canonical artifacts without reranking', async () => {
+  const repo = await makeTempRepo();
+  const date = '2026-07-08';
+  const draft = { collectedAt: 1_783_476_198, enabledSources: ['twitter'], items: [{ id: '1' }] };
+  const ranking = { runId: 'run-a', date };
+  const curation = { runId: 'run-a', date, curationRevision: 'curation-a' };
+  const decision = { runId: 'run-a', date, curationRevision: 'curation-a', revision: 2 };
+  for (const [name, value] of Object.entries({ ranking, curation, 'selection-decision': decision })) {
+    await writeFile(join(repo, 'output', `${date}-${name}.json`), JSON.stringify(value));
+  }
+  let finalizeInput;
+  const fakePipeline = {
+    draftModule: { readPendingDraft: async () => draft },
+    rankingArtifactModule: { decodeRankingArtifact: (value) => value },
+    curationArtifactModule: { decodeCurationArtifact: (value) => value },
+    selectionDecisionModule: { decodeSelectionDecision: (value) => value },
+    stateModule: { readState: async () => ({}), writeState: async () => {} },
+    publishModule: { publish: async () => {} },
+    preferencesModule: { recordPreferenceHistoryFromSelectionReport: async () => {} },
+    scoreFeedbackHistoryModule: { appendScoreFeedbackHistoryIdempotently: async () => 0 },
+    publicationWorkflowModule: { finalizePublication: async (input) => {
+      finalizeInput = input;
+      return { selectedItems: [{ id: '1' }], feedbackCount: 1, report: {} };
+    } },
+  };
+  try {
+    const summary = await runPublish({ pipeline: fakePipeline, repoRoot: repo, log: () => {} });
+    assert.deepEqual(finalizeInput.ranking, ranking);
+    assert.deepEqual(finalizeInput.curation, curation);
+    assert.deepEqual(finalizeInput.decision, decision);
+    assert.match(summary, /feedback-review\.json/);
+  } finally { await rm(repo, { recursive: true, force: true }); }
+});
 
 test('runPublish formats the selection, builds the report, publishes, advances state, clears the draft', async () => {
   const repo = await makeTempRepo();
@@ -233,11 +274,18 @@ test('runPublish formats the selection, builds the report, publishes, advances s
   const selectedItems = curatedItems.slice(0, 2);
 
   await mkdir(join(repo, 'output'), { recursive: true });
-  await writeFile(join(repo, 'output', `${date}-curation.json`), JSON.stringify({ date, collectedAt, enabledSources: ['twitter'], collectionWarnings: ['w'], curatedItems, curationDiagnostics: { rejectedCount: 0 } }));
-  await writeFile(join(repo, 'output', `${date}-selection.json`), JSON.stringify({ date, selectedItems }));
+  const ranking = { runId: 'run-a', date, rankedItems: draft.items };
+  const curation = { runId: 'run-a', date, collectedAt, collectionWarnings: ['w'], curatedItems,
+    curationDiagnostics: { rejectedCount: 0 } };
+  const decision = { runId: 'run-a', date, selectedItems };
+  await writeFile(join(repo, 'output', `${date}-ranking.json`), JSON.stringify(ranking));
+  await writeFile(join(repo, 'output', `${date}-curation.json`), JSON.stringify(curation));
+  await writeFile(join(repo, 'output', `${date}-selection-decision.json`), JSON.stringify(decision));
 
   const calls = { format: null, recordPref: null, publish: null, writeState: null, cleared: false };
-  const initialState = { sources: { twitter: { lastPublishedTime: 0 }, substack: { lastPublishedTime: 0 } } };
+  const initialState = { sources: {
+    twitter: { lastPublishedTime: 0 }, substack: { lastPublishedTime: 0 }, aihot: { lastPublishedTime: 77 },
+  } };
   const fakePipeline = {
     draftModule: {
       readPendingDraft: async () => draft,
@@ -251,10 +299,28 @@ test('runPublish formats the selection, builds the report, publishes, advances s
         calls.writeState = state;
       },
     },
-    rankModule: {
-      rankItems: (items) => items.map((i, idx) => ({ ...i, priorityScore: 50 - idx, editorialScore: 1, engagementScore: 0, decisionReasons: [] })),
-      selectCandidatePool: (items) => items,
+    sourceRegistryModule: {
+      advancePublishedState: (state, enabledSources, nextTime) => ({
+        sources: Object.fromEntries(Object.entries(state.sources).map(([source, value]) => [
+          source, enabledSources.includes(source) ? { lastPublishedTime: nextTime } : value,
+        ])),
+      }),
     },
+    rankingArtifactModule: { decodeRankingArtifact: (value) => value },
+    curationArtifactModule: { decodeCurationArtifact: (value) => value },
+    selectionDecisionModule: { decodeSelectionDecision: (value) => value },
+    scoreFeedbackHistoryModule: { appendScoreFeedbackHistoryIdempotently: async () => 0 },
+    publicationWorkflowModule: { finalizePublication: async (input, deps) => {
+      const formatted = fakePipeline.formatModule.format(input.decision.selectedItems, date);
+      const report = { ...input.ranking, curatedItems: input.curation.curatedItems,
+        selectedItems: input.decision.selectedItems, collectionWarnings: input.curation.collectionWarnings };
+      await deps.recordSelectionHistory(report);
+      await deps.writePublicationOutputs(formatted, report);
+      await deps.writeState({ sources: { twitter: { lastPublishedTime: collectedAt },
+        substack: { lastPublishedTime: 0 }, aihot: { lastPublishedTime: 77 } } });
+      await deps.clearDraft();
+      return { report, selectedItems: input.decision.selectedItems, feedbackCount: 0 };
+    } },
     formatModule: {
       format: (selected, d) => {
         calls.format = { selected, d };
@@ -291,9 +357,10 @@ test('runPublish formats the selection, builds the report, publishes, advances s
     // preference history recorded to the dated report path
     assert.equal(calls.recordPref.opts.reportPath, `output/${date}-selection-report.json`);
 
-    // state advanced: twitter (enabled) -> collectedAt, substack (not enabled) -> unchanged
+    // state advanced: twitter (enabled) -> collectedAt; every disabled source remains unchanged
     assert.equal(calls.writeState.sources.twitter.lastPublishedTime, collectedAt);
     assert.equal(calls.writeState.sources.substack.lastPublishedTime, 0);
+    assert.equal(calls.writeState.sources.aihot.lastPublishedTime, 77);
 
     // draft cleared only after everything else succeeded
     assert.equal(calls.cleared, true);
@@ -306,6 +373,7 @@ test('runPublish fails loud when the selection artifact is missing', async () =>
   const repo = await makeTempRepo();
   const date = '2026-07-08';
   const collectedAt = 1_783_476_198;
+  await writeFile(join(repo, 'output', `${date}-ranking.json`), JSON.stringify({ rankedItems: [{ id: '1' }] }));
   await writeFile(join(repo, 'output', `${date}-curation.json`), JSON.stringify({ curatedItems: [{ id: '1' }] }));
   const fakePipeline = {
     draftModule: { readPendingDraft: async () => ({ items: [{ id: '1' }], enabledSources: ['twitter'], collectedAt }) },
@@ -323,6 +391,14 @@ test('runPublish fails loud when the selection artifact is missing', async () =>
 });
 
 // ───────────────────────── the core invariant: no LLM inside the skill ─────────────────────────
+
+test('skill documents the post-publish content-tag feedback protocol', async () => {
+  const skill = await readFile(join(import.meta.dirname, '..', 'SKILL.md'), 'utf-8');
+  for (const phrase of ['评分过高', '评分过低', 'selection-decision.json', 'smallest content Tag',
+    'no_change', 'never modify author/domain rules', 'feedback-apply']) {
+    assert.match(skill, new RegExp(phrase, 'i'));
+  }
+});
 
 test('the skill scripts never invoke a third-party LLM or the monolithic generate entrypoint', async () => {
   const skillRoot = join(import.meta.dirname, '..');

@@ -2,7 +2,18 @@ import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promise
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CollectedItem, CuratedItem, RankedItem, SelectionReport, SourceName } from './types.js';
+import { writeJsonAtomic } from './artifact-codec.js';
+import type {
+  CollectedItem,
+  ContentTagId,
+  CuratedItem,
+  CustomContentTagDefinition,
+  RankedItem,
+  RankingSignalId,
+  ScoreFactor,
+  SelectionReport,
+  SourceName,
+} from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = join(__dirname, '..');
@@ -30,6 +41,18 @@ export interface ConfirmedPreferenceRules {
   domainRules: Record<string, PreferenceRule>;
   positiveTopicHints: string[];
   negativeTopicHints: string[];
+  policyRevision?: number;
+  tagWeightOverrides?: Partial<Record<ContentTagId, number>>;
+  rankingSignalWeightOverrides?: Partial<Record<RankingSignalId, number>>;
+  appliedAdjustmentIds?: string[];
+  customTags?: CustomContentTagDefinition[];
+  adjustmentEvidence?: Array<{
+    adjustmentId: string;
+    feedbackEventIds: string[];
+    attribution: string;
+    outcome: 'applied' | 'no_change';
+    recordedAt: string;
+  }>;
 }
 
 export interface PreferenceItemSnapshot {
@@ -51,6 +74,8 @@ export interface PreferenceItemSnapshot {
   editorialScore?: number;
   engagementScore?: number;
   decisionReasons: string[];
+  contentTags?: ContentTagId[];
+  scoreFactors?: ScoreFactor[];
   enteredCandidatePool?: boolean;
   selectedByLlm?: boolean;
   selected: boolean;
@@ -111,6 +136,7 @@ export interface PreferenceProfile {
     twitterFeeds: PreferenceAggregateEntry[];
     categories: PreferenceAggregateEntry[];
     decisionReasons: PreferenceAggregateEntry[];
+    tags: PreferenceAggregateEntry[];
   };
   suggestions: PreferenceSuggestions;
 }
@@ -151,6 +177,12 @@ function createEmptyRules(updatedAt = ''): ConfirmedPreferenceRules {
     domainRules: {},
     positiveTopicHints: [],
     negativeTopicHints: [],
+    policyRevision: 1,
+    tagWeightOverrides: {},
+    rankingSignalWeightOverrides: {},
+    appliedAdjustmentIds: [],
+    customTags: [],
+    adjustmentEvidence: [],
   };
 }
 
@@ -237,6 +269,8 @@ export function buildPreferenceEventFromSelectionReport(
       editorialScore: item.editorialScore,
       engagementScore: item.engagementScore,
       decisionReasons: item.decisionReasons,
+      ...(item.contentTags ? { contentTags: item.contentTags } : {}),
+      ...(item.scoreFactors ? { scoreFactors: item.scoreFactors } : {}),
       enteredCandidatePool: item.enteredCandidatePool,
       selectedByLlm: item.selectedByLlm,
       selected,
@@ -269,6 +303,10 @@ export async function recordPreferenceHistoryFromSelectionReport(
   historyPath = DEFAULT_PREFERENCE_HISTORY_PATH,
 ): Promise<PreferenceHistoryEvent> {
   const event = buildPreferenceEventFromSelectionReport(report, options);
+  if (options.runId) {
+    const existing = await readPreferenceHistory(historyPath);
+    if (existing.some((entry) => entry.runId === event.runId)) return event;
+  }
   await appendPreferenceHistoryEvent(event, historyPath);
   return event;
 }
@@ -430,6 +468,7 @@ export function buildPreferenceProfile(
   const twitterFeeds = new Map<string, PreferenceAggregateEntry>();
   const categories = new Map<string, PreferenceAggregateEntry>();
   const decisionReasons = new Map<string, PreferenceAggregateEntry>();
+  const tags = new Map<string, PreferenceAggregateEntry>();
 
   for (const item of items) {
     incrementAggregate(authors, item.authorUsername, item.selected, item.authorName);
@@ -437,9 +476,8 @@ export function buildPreferenceProfile(
     incrementAggregate(sources, item.source, item.selected);
     incrementAggregate(twitterFeeds, item.twitterFeed, item.selected);
     incrementAggregate(categories, item.category, item.selected);
-    for (const reason of item.decisionReasons) {
-      incrementAggregate(decisionReasons, reason, item.selected);
-    }
+    for (const reason of item.decisionReasons) incrementAggregate(decisionReasons, reason, item.selected);
+    for (const tag of item.contentTags ?? []) incrementAggregate(tags, tag, item.selected);
   }
 
   const authorEntries = sortedAggregate(authors);
@@ -462,6 +500,7 @@ export function buildPreferenceProfile(
       twitterFeeds: sortedAggregate(twitterFeeds),
       categories: sortedAggregate(categories),
       decisionReasons: reasonEntries,
+      tags: sortedAggregate(tags),
     },
     suggestions: {
       authorRules: buildRuleSuggestions(authorEntries, baselineSelectedRate, minSeen),
@@ -531,6 +570,27 @@ function normalizeStringArray(value: unknown): string[] {
   );
 }
 
+function normalizeCustomTags(value: unknown): CustomContentTagDefinition[] {
+  if (!Array.isArray(value)) return [];
+  const result: CustomContentTagDefinition[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as Partial<CustomContentTagDefinition>;
+    if (typeof candidate.id !== 'string' || !candidate.id.startsWith('custom:') ||
+        typeof candidate.label !== 'string' || !candidate.label.trim()) continue;
+    const keywords = normalizeStringArray(candidate.keywords).map((keyword) => keyword.toLowerCase());
+    if (keywords.length === 0) continue;
+    result.push({ id: candidate.id as `custom:${string}`, label: candidate.label.trim(), keywords });
+  }
+  return [...new Map(result.map((tag) => [tag.id, tag])).values()];
+}
+
+function normalizeWeightRecord(value: unknown, prefix: string): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key, weight]) =>
+    key.startsWith(prefix) && typeof weight === 'number' && Number.isFinite(weight)));
+}
+
 export function normalizeConfirmedPreferenceRules(value: unknown): ConfirmedPreferenceRules {
   if (!value || typeof value !== 'object') return createEmptyRules();
   const candidate = value as Partial<ConfirmedPreferenceRules>;
@@ -541,6 +601,18 @@ export function normalizeConfirmedPreferenceRules(value: unknown): ConfirmedPref
     domainRules: normalizeRuleRecord(candidate.domainRules),
     positiveTopicHints: normalizeStringArray(candidate.positiveTopicHints),
     negativeTopicHints: normalizeStringArray(candidate.negativeTopicHints),
+    policyRevision: typeof candidate.policyRevision === 'number' && Number.isInteger(candidate.policyRevision)
+      && candidate.policyRevision >= 1 ? candidate.policyRevision : 1,
+    tagWeightOverrides: normalizeWeightRecord(candidate.tagWeightOverrides, '') as Partial<Record<ContentTagId, number>>,
+    rankingSignalWeightOverrides: normalizeWeightRecord(
+      candidate.rankingSignalWeightOverrides,
+      'ranking:',
+    ) as Partial<Record<RankingSignalId, number>>,
+    appliedAdjustmentIds: normalizeStringArray(candidate.appliedAdjustmentIds),
+    customTags: normalizeCustomTags(candidate.customTags),
+    adjustmentEvidence: Array.isArray(candidate.adjustmentEvidence)
+      ? candidate.adjustmentEvidence.filter((entry) => entry && typeof entry === 'object') as ConfirmedPreferenceRules['adjustmentEvidence']
+      : [],
   };
 }
 
@@ -553,8 +625,7 @@ export async function writeConfirmedPreferenceRules(
   rules: ConfirmedPreferenceRules,
   rulesPath = DEFAULT_PREFERENCE_RULES_PATH,
 ): Promise<void> {
-  await mkdir(dirname(rulesPath), { recursive: true });
-  await writeFile(rulesPath, JSON.stringify(normalizeConfirmedPreferenceRules(rules), null, 2), 'utf-8');
+  await writeJsonAtomic(rulesPath, normalizeConfirmedPreferenceRules(rules));
 }
 
 function matchesDomainRule(itemDomain: string | undefined, ruleDomain: string): boolean {

@@ -205,6 +205,9 @@ test('runGenerate writes curation diagnostics into the selection report when cur
   });
 
   assert.deepEqual((publishedReport as { curationDiagnostics?: CurationDiagnostics }).curationDiagnostics, diagnostics);
+  assert.equal((publishedReport as { schemaVersion?: number }).schemaVersion, 1);
+  assert.equal((publishedReport as { curationMode?: string }).curationMode, 'npm-model');
+  assert.deepEqual((publishedReport as { scoreFeedbackById?: object }).scoreFeedbackById, {});
 });
 
 test('runGenerate logs curation diagnostics when curate returns zero items', async () => {
@@ -298,7 +301,7 @@ test('runGenerate writes collection warnings into the selection report', async (
   ]);
 });
 
-test('runGenerate records the final select preference event before publish side effects', async () => {
+test('runGenerate does not record selection history when publication outputs fail', async () => {
   const events: string[] = [];
   let recordedReport: SelectionReport | undefined;
 
@@ -340,9 +343,8 @@ test('runGenerate records the final select preference event before publish side 
     /publish failed/,
   );
 
-  assert.deepEqual(events, ['record:1', 'publish']);
-  assert.equal(recordedReport?.rankedItems[0]?.selectedByHuman, true);
-  assert.equal(recordedReport?.selectedItems.length, 1);
+  assert.deepEqual(events, ['publish']);
+  assert.equal(recordedReport, undefined);
 });
 
 test('runGenerate writes curation diagnostics into review packets when curate returns diagnostics', async () => {
