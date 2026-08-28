@@ -81,3 +81,31 @@ test('applyProxyFromEnv is a no-op (no dispatcher installed) when no proxy is se
   assert.equal(config.enabled, false);
   assert.equal(sink.calls.length, 0);
 });
+
+test('applyProxyFromEnv keeps loopback out of the proxy when NO_PROXY is empty', () => {
+  // Intent: Surge-style HTTP_PROXY with empty NO_PROXY must not intercept 127.0.0.1.
+  // select-start health-checks loopback; a proxied probe looks dead and kills the server.
+  const sink = fakeSink();
+  const config = applyProxyFromEnv({ HTTP_PROXY: 'http://127.0.0.1:6152' }, sink);
+  assert.equal(config.enabled, true);
+  const noProxy = config.noProxy ?? '';
+  for (const host of ['127.0.0.1', 'localhost', '::1']) {
+    assert.equal(
+      noProxy.split(',').map((part) => part.trim()).includes(host),
+      true,
+      `expected ${host} in noProxy, got ${noProxy}`,
+    );
+  }
+  assert.equal(sink.calls.length, 1);
+  assert.ok(sink.calls[0] instanceof EnvHttpProxyAgent);
+});
+
+test('applyProxyFromEnv preserves existing NO_PROXY entries when adding loopback', () => {
+  const config = applyProxyFromEnv(
+    { HTTP_PROXY: 'http://127.0.0.1:6152', NO_PROXY: 'example.com' },
+    fakeSink(),
+  );
+  const parts = (config.noProxy ?? '').split(',').map((part) => part.trim());
+  assert.equal(parts.includes('example.com'), true);
+  assert.equal(parts.includes('127.0.0.1'), true);
+});

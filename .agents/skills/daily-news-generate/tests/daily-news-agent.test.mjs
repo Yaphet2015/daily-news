@@ -4,11 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import http from 'node:http';
+import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import {
   buildAgentRankingArtifact,
   buildSelectHtml,
   mergeForcedSelectItems,
   parseCliArgs,
+  probeHealth,
   resolveRepoRoot,
   resolveSelectPort,
   resolveSelection,
@@ -203,6 +206,29 @@ test('resolveSelectPort honors DAILY_NEWS_SELECT_PORT, falls back to the default
   assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '0' }), /Invalid DAILY_NEWS_SELECT_PORT/);
   assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '70000' }), /Invalid DAILY_NEWS_SELECT_PORT/);
   assert.throws(() => resolveSelectPort({ DAILY_NEWS_SELECT_PORT: '1.5' }), /Invalid DAILY_NEWS_SELECT_PORT/);
+});
+
+test('probeHealth reaches 127.0.0.1 even when global fetch is forced through a dead proxy', async () => {
+  // Intent: select-start must not kill a healthy server because HTTP_PROXY intercepted /health.
+  const original = getGlobalDispatcher();
+  const server = http.createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    setGlobalDispatcher(new EnvHttpProxyAgent({ httpProxy: 'http://127.0.0.1:9' }));
+    assert.equal(await probeHealth(port), true);
+  } finally {
+    setGlobalDispatcher(original);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 test('status lists canonical feedback artifacts and every source cursor', async () => {

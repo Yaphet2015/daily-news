@@ -947,14 +947,34 @@ export function resolveSelectPort(env = process.env) {
   return port;
 }
 
-async function probeHealth(port) {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/health`);
-    const data = await res.json().catch(() => ({}));
-    return res.ok && data.ok === true;
-  } catch {
-    return false;
-  }
+export function probeHealth(port) {
+  // Direct loopback HTTP — never `fetch`. applyProxyFromEnv installs a global
+  // dispatcher that honors HTTP_PROXY; an empty NO_PROXY would send this probe
+  // through Surge and make a healthy select server look dead.
+  return new Promise((resolve) => {
+    const req = http.get({
+      host: '127.0.0.1',
+      port,
+      path: '/health',
+      timeout: 1000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+          resolve(res.statusCode === 200 && data.ok === true);
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
 }
 
 async function waitForSelectHealth(port, timeoutMs) {
