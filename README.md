@@ -36,6 +36,8 @@ npm run preferences:review
 
 Agent HTML select 还提供独立的 `评分过高` / `评分过低` 按钮。每次点击立即写入 `output/<date>-selection-decision.json`，不依赖是否勾选发布。publish 后，有反馈时生成 `feedback-review.json` 并追加 `data/score-feedback-history.jsonl`。Agent 按内容 Tag 归因，写出受约束的 `feedback-adjustment.json`，再运行 `feedback-apply --date=<date>`。按钮反馈不会修改作者、域名、来源开关或 `@tom_doerr` hard filter。
 
+select 页 UI 已接入 Ant Design：页面由 antd v5 组件（Layout / Card / Checkbox / Tag / Button / Alert 等）渲染，不写自定义样式，使用 antd 默认主题（跟随系统深色模式切换 dark 算法）；antd 与 React 通过 CDN 固定版本加载，页面需要联网打开。终端版 `select` 保持不变。
+
 ## 快速开始
 
 ### 1. 安装依赖

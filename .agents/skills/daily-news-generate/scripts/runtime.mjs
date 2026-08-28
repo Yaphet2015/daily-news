@@ -385,7 +385,6 @@ function validateCurateOutput(output) {
 
 export function buildSelectHtml(curation, serverOrigin, decision = null) {
   const date = curation.date;
-  const target = `${DEFAULT_SELECT_TARGET_MIN}-${DEFAULT_SELECT_TARGET_MAX}`;
   // Escape so the JSON is safe inside <script> (handles </script>, U+2028/2029, etc.).
   const dataJson = JSON.stringify({
     date,
@@ -406,196 +405,296 @@ export function buildSelectHtml(curation, serverOrigin, decision = null) {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AI 日刊选择 · ${date}</title>
+<!-- Ant Design default theme (no custom styles). Versions are pinned so the page renders
+     the same every day. These are the official UMD builds; antd needs React/ReactDOM/dayjs
+     globals loaded first. -->
+<link rel="stylesheet" href="https://unpkg.com/antd@5.29.3/dist/reset.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/dayjs@1.11.23/dayjs.min.js"></script>
+<script src="https://unpkg.com/antd@5.29.3/dist/antd-with-locales.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.8/babel.min.js"></script>
 <style>
-  :root {
-    --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --card: #f7f7f8; --border: #e5e7eb;
-    --accent: #2563eb; --accent-fg: #ffffff; --warn: #b45309; --ok: #047857; --bad: #b91c1c;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#0f1115; --fg:#e6e6e6; --muted:#9aa3af; --card:#171a21; --border:#272b33; --accent:#60a5fa; --accent-fg:#061020; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
-    line-height:1.6; padding:1rem 1rem 9rem; }
-  header { max-width:920px; margin:0 auto 1rem; }
-  header h1 { font-size:1.4rem; margin:0 0 .25rem; }
-  header .sub { color:var(--muted); font-size:.95rem; }
-  .warn { background:#fef3c7; color:var(--warn); border:1px solid #fcd34d; border-radius:8px; padding:.6rem .8rem; margin:.6rem 0; }
-  @media (prefers-color-scheme: dark){ .warn{ background:#3a2f12; border-color:#5a4a1a; } }
-  main { max-width:920px; margin:0 auto; }
-  h2.cat { font-size:1.05rem; margin:1.4rem 0 .5rem; padding-bottom:.3rem; border-bottom:1px solid var(--border); display:flex; gap:.6rem; align-items:baseline; }
-  h2.cat .count { color:var(--muted); font-weight:400; font-size:.85rem; }
-  .item { display:flex; gap:.7rem; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem .8rem; margin:.5rem 0; }
-  .item input[type=checkbox] { width:1.1rem; height:1.1rem; margin-top:.25rem; accent-color:var(--accent); flex:0 0 auto; }
-  .item .body { min-width:0; }
-  .item .title { font-weight:600; font-size:1rem; }
-  .item .summary { color:var(--fg); margin:.25rem 0 .4rem; font-size:.95rem; white-space:pre-wrap; }
-  .item .meta { color:var(--muted); font-size:.8rem; display:flex; flex-wrap:wrap; gap:.35rem .7rem; align-items:center; }
-  .badge { background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:.05rem .5rem; font-size:.72rem; }
-  .badge.src-twitter{ color:#1d9bf0; } .badge.src-substack{ color:#ff6719; }
-  .score{ color:var(--accent); font-variant-numeric:tabular-nums; }
-  .reason{ color:var(--muted); font-style:italic; }
-  .ed{ color:var(--ok); }
-  .teaser{ color:var(--warn); }
-  .feedback { display:flex; gap:.4rem; align-items:center; margin-top:.55rem; flex-wrap:wrap; }
-  .feedback button { background:transparent; color:var(--fg); border:1px solid var(--border); padding:.3rem .65rem; font-size:.8rem; }
-  .feedback button.active { border-color:var(--accent); color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); }
-  .feedback .status { color:var(--muted); font-size:.78rem; }
-  .feedback .error { color:var(--bad); font-size:.78rem; }
-  a { color:var(--accent); text-decoration:none; word-break:break-all; }
-  a:hover{ text-decoration:underline; }
-  .thumbs{ display:flex; flex-wrap:wrap; gap:.4rem; margin:.35rem 0; }
-  .thumbs img{ width:96px; height:96px; object-fit:cover; border-radius:6px; border:1px solid var(--border); }
-  footer { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--border);
-    padding:.7rem 1rem; display:flex; gap:.7rem; align-items:center; flex-wrap:wrap; justify-content:center; }
-  .count-pill{ font-weight:600; }
-  .count-pill.bad{ color:var(--bad); } .count-pill.ok{ color:var(--ok); }
-  button { background:var(--accent); color:var(--accent-fg); border:none; border-radius:8px; padding:.55rem 1rem; font-size:.95rem; cursor:pointer; }
-  button.ghost{ background:transparent; color:var(--fg); border:1px solid var(--border); }
-  button:disabled{ opacity:.55; cursor:not-allowed; }
-  .msg{ flex:1 1 100%; text-align:center; min-height:1.2rem; font-size:.9rem; }
-  .msg.ok{ color:var(--ok); } .msg.bad{ color:var(--bad); }
+  /* Structural layout only — colors, fonts and component looks all come from the antd default theme. */
+  .select-page { max-width: 920px; margin: 0 auto; padding: 16px 16px 104px; }
+  .select-action-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; text-align: center; }
 </style>
 </head>
 <body>
-<header>
-  <h1>AI 日刊选择 · ${date}</h1>
-  <div class="sub">勾选要发布的条目，建议选 ${target} 条，然后点「确认发布」。</div>
-  <div id="warn"></div>
-</header>
-<main id="main"></main>
-<footer>
-  <span>已选 <span id="count" class="count-pill">0</span> / <span id="target">${target}</span></span>
-  <button class="ghost" id="all">全选</button>
-  <button class="ghost" id="none">清空</button>
-  <button id="confirm">确认发布</button>
-  <div class="msg" id="msg"></div>
-</footer>
+<div id="root"></div>
 <script>
+  // Fail loud when the CDN assets cannot load (e.g. offline): babel then never runs and #root stays empty.
+  window.addEventListener('load', function () {
+    if (document.getElementById('root').childElementCount === 0) {
+      document.getElementById('root').innerHTML =
+        '<p style="padding:24px;font-family:system-ui;color:#b91c1c">页面加载失败：Ant Design 组件（CDN）未能载入，请检查网络后刷新。</p>';
+    }
+  });
+</script>
+<script type="text/babel" data-presets="react">
 const DATA = ${dataJson};
+const { useState } = React;
+const {
+  Alert, App, Button, Card, Checkbox, ConfigProvider, Divider, Flex, Image, Layout, Space, Tag, Typography, theme,
+} = antd;
+const { Title, Text, Paragraph, Link } = Typography;
+const { Content, Footer } = Layout;
+
+const CATS = ['Product', 'Tutorial', 'Opinions/Thoughts'];
+const TARGET = DATA.targetMin + '-' + DATA.targetMax;
 // Persist the user's ticks across reloads/restarts so an accidental refresh or a server
-// restart never loses their selections.
+// restart never loses their selections. The confirmed decision file on the server is SSOT;
+// this cache only applies while runId + curationRevision are unchanged.
 const STORE_KEY = 'daily-news-select:' + DATA.runId + ':' + DATA.curationRevision;
-let decisionRevision = DATA.decisionRevision;
-let confirmedFeedback = {...DATA.scoreFeedbackById};
-const CATS = ['Product','Tutorial','Opinions/Thoughts'];
 const byCat = {};
 for (const c of CATS) byCat[c] = [];
-for (const it of DATA.curatedItems) (byCat[it.category] || (byCat[it.category]=[])).push(it);
-const warn = document.getElementById('warn');
-if (DATA.collectionWarnings.length) {
-  warn.innerHTML = '<div class="warn"><b>采集告警：</b>' + DATA.collectionWarnings.map(esc).join('；') + '</div>';
+const unknownCategoryItems = [];
+for (const it of DATA.curatedItems) {
+  if (byCat[it.category]) byCat[it.category].push(it);
+  else unknownCategoryItems.push(it); // fail loud instead of silently dropping
 }
-const main = document.getElementById('main');
-for (const cat of CATS) {
-  const list = byCat[cat]; if (!list || !list.length) continue;
-  const h = document.createElement('h2'); h.className='cat';
-  h.innerHTML = '<span>'+esc(cat)+'</span><span class="count">'+list.length+' 条</span>';
-  main.appendChild(h);
-  for (const it of list) main.appendChild(renderItem(it));
+
+function restoreSelection() {
+  let ids;
+  try { ids = JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch (e) { return []; }
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const valid = new Set(DATA.curatedItems.map((it) => it.id));
+  return ids.filter((id) => valid.has(id));
 }
-function renderItem(it){
-  const card = document.createElement('div'); card.className='item';
-  const cb = document.createElement('input'); cb.type='checkbox'; cb.value=it.id; cb.dataset.id=it.id;
-  cb.addEventListener('change', () => { recount(); saveSelection(); });
-  const body = document.createElement('div'); body.className='body';
-  const title = document.createElement('div'); title.className='title'; title.textContent = it.title; body.appendChild(title);
-  const sum = document.createElement('div'); sum.className='summary'; sum.textContent = it.summary; body.appendChild(sum);
-  if (Array.isArray(it.media) && it.media.length){
-    const thumbs=document.createElement('div'); thumbs.className='thumbs';
-    for (const m of it.media.filter(m=>m.type==='photo').slice(0,4)){
-      const img=document.createElement('img'); img.src=m.url; img.alt=it.title; img.loading='lazy'; img.referrerPolicy='no-referrer';
-      thumbs.appendChild(img);
+
+function saveSelection(ids) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(ids)); } catch (e) { /* best-effort cache */ }
+}
+
+function RootApp() {
+  // antd default theme; follow the OS dark preference via antd's own dark algorithm (no custom tokens).
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return (
+    <ConfigProvider theme={prefersDark ? { algorithm: theme.darkAlgorithm } : undefined}>
+      <App>
+        <SelectPage />
+      </App>
+    </ConfigProvider>
+  );
+}
+
+function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle, onFeedback }) {
+  const photos = (Array.isArray(item.media) ? item.media : []).filter((m) => m.type === 'photo').slice(0, 4);
+  return (
+    <Card size="small" style={{ marginBottom: 12 }}>
+      <Flex align="flex-start" gap={8}>
+        <Checkbox
+          style={{ marginTop: 4 }}
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onToggle(item.id, e.target.checked)}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Title level={5} style={{ marginTop: 0, marginBottom: 4 }}>{item.title}</Title>
+          <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{item.summary}</Paragraph>
+          {photos.length > 0 && (
+            <Image.PreviewGroup>
+              <Space size={8} wrap style={{ marginBottom: 8 }}>
+                {photos.map((m) => (
+                  <Image
+                    key={m.url}
+                    width={96}
+                    height={96}
+                    src={m.url}
+                    alt={item.title}
+                    style={{ objectFit: 'cover', borderRadius: 6 }}
+                    referrerPolicy="no-referrer"
+                  />
+                ))}
+              </Space>
+            </Image.PreviewGroup>
+          )}
+          <Space size={[6, 6]} wrap style={{ marginBottom: 4 }}>
+            <Tag>{item.source}</Tag>
+            {(item.attribution || item.author) && <Tag>{item.attribution || item.author}</Tag>}
+            {typeof item.priorityScore === 'number' && <Tag color="blue">优先级 {item.priorityScore}</Tag>}
+            {item.threadPartCount ? <Tag>thread · {item.threadPartCount}</Tag> : null}
+            {item.substackTeaserOnly && <Tag color="warning">订阅墙/预览</Tag>}
+            {(item.decisionReasons || []).slice(0, 3).map((reason) => <Tag key={reason}>{reason}</Tag>)}
+          </Space>
+          {item.editorialReason && (
+            <Paragraph type="success" style={{ marginBottom: 4 }}>编辑理由：{item.editorialReason}</Paragraph>
+          )}
+          <Space size={12} wrap>
+            <Link href={item.originUrl || item.url} target="_blank" rel="noopener noreferrer">原帖/来源</Link>
+            {item.originUrl && item.originUrl !== item.url && (
+              <Link href={item.url} target="_blank" rel="noopener noreferrer">引用</Link>
+            )}
+          </Space>
+          <Space size={8} wrap style={{ marginTop: 8 }}>
+            <Button
+              size="small"
+              loading={rowState.saving}
+              type={activeDirection === 'too_high' ? 'primary' : 'default'}
+              onClick={() => onFeedback(item.id, 'too_high')}
+            >评分过高</Button>
+            <Button
+              size="small"
+              loading={rowState.saving}
+              danger
+              type={activeDirection === 'too_low' ? 'primary' : 'default'}
+              onClick={() => onFeedback(item.id, 'too_low')}
+            >评分过低</Button>
+            {rowState.status && <Text type="secondary">{rowState.status}</Text>}
+            {rowState.error && <Text type="danger">保存失败：{rowState.error}</Text>}
+          </Space>
+        </div>
+      </Flex>
+    </Card>
+  );
+}
+
+function SelectPage() {
+  const { message } = App.useApp();
+  const [checkedIds, setCheckedIds] = useState(restoreSelection);
+  const [revision, setRevision] = useState(DATA.decisionRevision);
+  const [confirmedFeedback, setConfirmedFeedback] = useState({ ...DATA.scoreFeedbackById });
+  const [rowStates, setRowStates] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const checked = new Set(checkedIds);
+  const count = checkedIds.length;
+
+  function toggleItem(id, next) {
+    const ids = next ? [...checkedIds, id] : checkedIds.filter((x) => x !== id);
+    setCheckedIds(ids);
+    saveSelection(ids);
+  }
+  function selectAll() {
+    const ids = DATA.curatedItems.map((it) => it.id);
+    setCheckedIds(ids);
+    saveSelection(ids);
+  }
+  function selectNone() {
+    setCheckedIds([]);
+    saveSelection([]);
+  }
+  async function sendFeedback(itemId, direction) {
+    setRowStates((prev) => ({ ...prev, [itemId]: { saving: true, status: '保存中…', error: '' } }));
+    try {
+      const res = await fetch(DATA.serverOrigin+'/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: DATA.date,
+          runId: DATA.runId,
+          curationRevision: DATA.curationRevision,
+          revision,
+          itemId,
+          direction,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      setRevision(data.decision.revision);
+      setConfirmedFeedback({ ...data.decision.scoreFeedbackById });
+      const saved = data.decision.scoreFeedbackById[itemId];
+      setRowStates((prev) => ({ ...prev, [itemId]: { saving: false, status: saved ? '已保存' : '已撤销', error: '' } }));
+    } catch (err) {
+      setRowStates((prev) => ({ ...prev, [itemId]: { saving: false, status: '', error: err.message } }));
     }
-    if (thumbs.childNodes.length) body.appendChild(thumbs);
   }
-  const meta=document.createElement('div'); meta.className='meta';
-  meta.appendChild(chip('badge src-'+esc(it.source), it.source));
-  meta.appendChild(textNode(it.attribution || it.author || ''));
-  if (typeof it.priorityScore==='number') meta.appendChild(chip('score', '优先级 '+it.priorityScore));
-  if (it.threadPartCount) meta.appendChild(chip('', 'thread · '+it.threadPartCount));
-  if (it.substackTeaserOnly) meta.appendChild(chip('teaser', '订阅墙/预览'));
-  for (const r of (it.decisionReasons||[]).slice(0,3)) meta.appendChild(chip('reason', r));
-  if (it.editorialReason) { meta.appendChild(document.createElement('br')); const e=document.createElement('span'); e.className='ed'; e.textContent='编辑理由：'+it.editorialReason; meta.appendChild(e); }
-  const links=document.createElement('div'); links.className='meta'; links.style.marginTop='.3rem';
-  links.appendChild(link('原帖/来源', it.originUrl || it.url));
-  if (it.originUrl && it.originUrl!==it.url) links.appendChild(link('引用', it.url));
-  body.appendChild(meta); body.appendChild(links);
-  const feedback=document.createElement('div'); feedback.className='feedback'; feedback.dataset.feedbackFor=it.id;
-  feedback.appendChild(feedbackButton(it.id, 'too_high', '评分过高'));
-  feedback.appendChild(feedbackButton(it.id, 'too_low', '评分过低'));
-  const status=document.createElement('span'); status.className='status'; feedback.appendChild(status);
-  const error=document.createElement('span'); error.className='error'; feedback.appendChild(error);
-  body.appendChild(feedback); card.appendChild(cb); card.appendChild(body); renderFeedback(it.id); return card;
-}
-function feedbackButton(id, direction, label){
-  const button=document.createElement('button'); button.type='button'; button.textContent=label;
-  button.dataset.feedbackId=id; button.dataset.direction=direction;
-  button.addEventListener('click', (event)=>{ event.preventDefault(); event.stopPropagation(); sendFeedback(id, direction); });
-  return button;
-}
-function renderFeedback(id){
-  const row=document.querySelector('[data-feedback-for="'+CSS.escape(id)+'"]'); if(!row) return;
-  const active=confirmedFeedback[id]?.direction;
-  row.querySelectorAll('button').forEach(button=>button.classList.toggle('active', button.dataset.direction===active));
-}
-async function sendFeedback(itemId, direction){
-  const row=document.querySelector('[data-feedback-for="'+CSS.escape(itemId)+'"]');
-  const buttons=[...row.querySelectorAll('button')]; const status=row.querySelector('.status'); const error=row.querySelector('.error');
-  buttons.forEach(button=>button.disabled=true); status.textContent='保存中…'; error.textContent='';
-  try {
-    const res=await fetch(DATA.serverOrigin+'/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({date:DATA.date, runId:DATA.runId, curationRevision:DATA.curationRevision,
-        revision:decisionRevision, itemId, direction})});
-    const data=await res.json().catch(()=>({}));
-    if(!res.ok || !data.ok) throw new Error(data.error || ('HTTP '+res.status));
-    decisionRevision=data.decision.revision; confirmedFeedback={...data.decision.scoreFeedbackById};
-    renderFeedback(itemId); status.textContent=confirmedFeedback[itemId] ? '已保存' : '已撤销';
-  } catch(err) { renderFeedback(itemId); status.textContent=''; error.textContent='保存失败：'+err.message; }
-  finally { buttons.forEach(button=>button.disabled=false); }
-}
-function chip(cls, txt){ const s=document.createElement('span'); s.className='badge '+cls; s.textContent=txt; return s; }
-function textNode(t){ if(!t) return document.createElement('span'); return chip('', t); }
-function link(label, href){ const a=document.createElement('a'); a.href=href; a.target='_blank'; a.rel='noopener noreferrer'; a.textContent=label; a.style.marginRight='.7rem'; return a; }
-function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function recount(){
-  const n=document.querySelectorAll('input[type=checkbox]:checked').length;
-  const el=document.getElementById('count'); el.textContent=n;
-  el.classList.remove('ok','bad');
-  if (n>=DATA.targetMin && n<=DATA.targetMax) el.classList.add('ok');
-  else if (n>DATA.targetMax) el.classList.add('bad');
-}
-function checkedIds(){ return [...document.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.dataset.id); }
-function saveSelection(){ try { localStorage.setItem(STORE_KEY, JSON.stringify(checkedIds())); } catch(e){} }
-function restoreSelection(){
-  let ids; try { ids = JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch(e){ return; }
-  if (!Array.isArray(ids) || !ids.length) return;
-  const set = new Set(ids);
-  document.querySelectorAll('input[type=checkbox]').forEach(c=>{ if (set.has(c.dataset.id)) c.checked = true; });
-}
-document.getElementById('all').addEventListener('click',()=>{ document.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true); recount(); saveSelection(); });
-document.getElementById('none').addEventListener('click',()=>{ document.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false); recount(); saveSelection(); });
-document.getElementById('confirm').addEventListener('click', confirm);
-async function confirm(){
-  const ids=[...document.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.dataset.id);
-  const msg=document.getElementById('msg'); msg.className='msg';
-  if (ids.length===0){ msg.className='msg bad'; msg.textContent='未选择任何条目'; return; }
-  msg.textContent='提交中…'; document.getElementById('confirm').disabled=true;
-  try{
-    const res=await fetch(DATA.serverOrigin+'/select', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:DATA.date, runId:DATA.runId, curationRevision:DATA.curationRevision, revision:decisionRevision, selectedIds:ids})});
-    const data=await res.json().catch(()=>({}));
-    if (!res.ok || !data.ok){ throw new Error(data.error || ('HTTP '+res.status)); }
-    msg.className='msg ok'; msg.textContent='✓ 已保存 '+data.count+' 条选择，可以关闭页面并回到终端。';
-    document.querySelectorAll('input[type=checkbox]').forEach(c=>c.disabled=true);
-    document.getElementById('all').disabled=true; document.getElementById('none').disabled=true;
-    try { localStorage.removeItem(STORE_KEY); } catch(e){}
-  }catch(err){
-    msg.className='msg bad'; msg.textContent='提交失败：'+err.message+'（服务器可能已关闭，请重新运行 select）';
-    document.getElementById('confirm').disabled=false;
+  async function confirmSelection() {
+    if (count === 0) { message.error('未选择任何条目'); return; }
+    setSubmitting(true);
+    try {
+      const res = await fetch(DATA.serverOrigin+'/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: DATA.date,
+          runId: DATA.runId,
+          curationRevision: DATA.curationRevision,
+          revision,
+          selectedIds: DATA.curatedItems.filter((it) => checked.has(it.id)).map((it) => it.id),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      setDone(true);
+      message.success('✓ 已保存 ' + data.count + ' 条选择，可以关闭页面并回到终端。');
+      try { localStorage.removeItem(STORE_KEY); } catch (e) { /* best-effort cache */ }
+    } catch (err) {
+      message.error('提交失败：' + err.message + '（服务器可能已关闭，请重新运行 select）');
+    } finally {
+      setSubmitting(false);
+    }
   }
+
+  const countNode = count > DATA.targetMax
+    ? <Text type="danger" strong>{count}</Text>
+    : count >= DATA.targetMin
+      ? <Text type="success" strong>{count}</Text>
+      : <Text strong>{count}</Text>;
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      <Content className="select-page">
+        <Title level={3} style={{ marginTop: 8 }}>AI 日刊选择 · {DATA.date}</Title>
+        <Paragraph type="secondary">勾选要发布的条目，建议选 {TARGET} 条，然后点「确认发布」。</Paragraph>
+        {DATA.collectionWarnings.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message="采集告警"
+            description={DATA.collectionWarnings.join('；')}
+            style={{ marginBottom: 8 }}
+          />
+        )}
+        {unknownCategoryItems.length > 0 && (
+          <Alert
+            type="error"
+            showIcon
+            message="存在未知分类的条目，未显示在下方列表"
+            description={unknownCategoryItems.map((it) => it.id + ' → ' + it.category).join('；')}
+            style={{ marginBottom: 8 }}
+          />
+        )}
+        {CATS.map((cat) => {
+          const list = byCat[cat];
+          if (!list || list.length === 0) return null;
+          return (
+            <section key={cat}>
+              <Flex justify="space-between" align="baseline" style={{ marginTop: 24 }}>
+                <Title level={5} style={{ margin: 0 }}>{cat}</Title>
+                <Text type="secondary">{list.length} 条</Text>
+              </Flex>
+              <Divider style={{ margin: '8px 0 12px' }} />
+              {list.map((it) => (
+                <ItemCard
+                  key={it.id}
+                  item={it}
+                  checked={checked.has(it.id)}
+                  disabled={done}
+                  activeDirection={confirmedFeedback[it.id]?.direction}
+                  rowState={rowStates[it.id] || {}}
+                  onToggle={toggleItem}
+                  onFeedback={sendFeedback}
+                />
+              ))}
+            </section>
+          );
+        })}
+      </Content>
+      <Footer className="select-action-bar">
+        <Space size={8} wrap>
+          <span>已选 {countNode} / {TARGET}</span>
+          <Button disabled={done} onClick={selectAll}>全选</Button>
+          <Button disabled={done} onClick={selectNone}>清空</Button>
+          <Button id="confirm" type="primary" disabled={submitting || done} onClick={confirmSelection}>确认发布</Button>
+        </Space>
+      </Footer>
+    </Layout>
+  );
 }
-restoreSelection(); recount();
+
+ReactDOM.createRoot(document.getElementById('root')).render(<RootApp />);
 </script>
 </body>
 </html>`;
