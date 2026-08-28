@@ -415,9 +415,11 @@ export function buildSelectHtml(curation, serverOrigin, decision = null) {
 <script src="https://unpkg.com/antd@5.29.3/dist/antd-with-locales.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.8/babel.min.js"></script>
 <style>
-  /* Structural layout only — colors, fonts and component looks all come from the antd default theme. */
-  .select-page { max-width: 920px; margin: 0 auto; padding: 16px 16px 104px; }
-  .select-action-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; text-align: center; }
+  /* Structural layout only — colors, fonts and component looks all come from the antd default theme.
+     width:100% is required: Content is a flex item, and margin:auto without a width makes it
+     shrink-to-fit its content instead of filling the page column. */
+  .select-page { width: 100%; max-width: 920px; margin: 0 auto; padding: 16px 16px 112px; box-sizing: border-box; }
+  .select-action-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; justify-content: center; padding: 12px 16px; box-sizing: border-box; }
 </style>
 </head>
 <body>
@@ -480,21 +482,31 @@ function RootApp() {
 
 function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle, onFeedback }) {
   const photos = (Array.isArray(item.media) ? item.media : []).filter((m) => m.type === 'photo').slice(0, 4);
+  // One quiet meta line instead of a wall of same-looking tags: source · author · thread · teaser.
+  const metaParts = [item.source, item.attribution || item.author];
+  if (item.threadPartCount) metaParts.push('thread · ' + item.threadPartCount);
+  if (item.substackTeaserOnly) metaParts.push('订阅墙/预览');
   return (
     <Card size="small" style={{ marginBottom: 12 }}>
-      <Flex align="flex-start" gap={8}>
+      <Flex align="flex-start" gap={10}>
         <Checkbox
-          style={{ marginTop: 4 }}
+          style={{ marginTop: 3 }}
           checked={checked}
           disabled={disabled}
           onChange={(e) => onToggle(item.id, e.target.checked)}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <Title level={5} style={{ marginTop: 0, marginBottom: 4 }}>{item.title}</Title>
-          <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{item.summary}</Paragraph>
+          <Flex align="baseline" gap={8} wrap>
+            <Title level={5} style={{ margin: 0, flex: '1 1 auto' }}>{item.title}</Title>
+            {typeof item.priorityScore === 'number' && (
+              <Tag color="blue" style={{ marginInlineEnd: 0, flex: '0 0 auto' }}>优先级 {item.priorityScore}</Tag>
+            )}
+          </Flex>
+          <Text type="secondary" style={{ fontSize: 12 }}>{metaParts.filter(Boolean).join(' · ')}</Text>
+          <Paragraph style={{ whiteSpace: 'pre-wrap', marginTop: 8, marginBottom: 8 }}>{item.summary}</Paragraph>
           {photos.length > 0 && (
             <Image.PreviewGroup>
-              <Space size={8} wrap style={{ marginBottom: 8 }}>
+              <Space size={8} wrap style={{ marginBottom: 4 }}>
                 {photos.map((m) => (
                   <Image
                     key={m.url}
@@ -509,40 +521,40 @@ function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle
               </Space>
             </Image.PreviewGroup>
           )}
-          <Space size={[6, 6]} wrap style={{ marginBottom: 4 }}>
-            <Tag>{item.source}</Tag>
-            {(item.attribution || item.author) && <Tag>{item.attribution || item.author}</Tag>}
-            {typeof item.priorityScore === 'number' && <Tag color="blue">优先级 {item.priorityScore}</Tag>}
-            {item.threadPartCount ? <Tag>thread · {item.threadPartCount}</Tag> : null}
-            {item.substackTeaserOnly && <Tag color="warning">订阅墙/预览</Tag>}
-            {(item.decisionReasons || []).slice(0, 3).map((reason) => <Tag key={reason}>{reason}</Tag>)}
-          </Space>
+          {(item.decisionReasons || []).length > 0 && (
+            <Paragraph type="secondary" italic style={{ marginBottom: 4 }}>
+              {(item.decisionReasons || []).slice(0, 3).join(' · ')}
+            </Paragraph>
+          )}
           {item.editorialReason && (
             <Paragraph type="success" style={{ marginBottom: 4 }}>编辑理由：{item.editorialReason}</Paragraph>
           )}
-          <Space size={12} wrap>
-            <Link href={item.originUrl || item.url} target="_blank" rel="noopener noreferrer">原帖/来源</Link>
-            {item.originUrl && item.originUrl !== item.url && (
-              <Link href={item.url} target="_blank" rel="noopener noreferrer">引用</Link>
-            )}
-          </Space>
-          <Space size={8} wrap style={{ marginTop: 8 }}>
-            <Button
-              size="small"
-              loading={rowState.saving}
-              type={activeDirection === 'too_high' ? 'primary' : 'default'}
-              onClick={() => onFeedback(item.id, 'too_high')}
-            >评分过高</Button>
-            <Button
-              size="small"
-              loading={rowState.saving}
-              danger
-              type={activeDirection === 'too_low' ? 'primary' : 'default'}
-              onClick={() => onFeedback(item.id, 'too_low')}
-            >评分过低</Button>
-            {rowState.status && <Text type="secondary">{rowState.status}</Text>}
-            {rowState.error && <Text type="danger">保存失败：{rowState.error}</Text>}
-          </Space>
+          <Divider dashed style={{ margin: '8px 0' }} />
+          <Flex justify="space-between" align="center" gap={12} wrap>
+            <Space size={16} wrap>
+              <Link href={item.originUrl || item.url} target="_blank" rel="noopener noreferrer">原帖/来源</Link>
+              {item.originUrl && item.originUrl !== item.url && (
+                <Link href={item.url} target="_blank" rel="noopener noreferrer">引用</Link>
+              )}
+            </Space>
+            <Space size={8} wrap>
+              <Button
+                size="small"
+                loading={rowState.saving}
+                type={activeDirection === 'too_high' ? 'primary' : 'default'}
+                onClick={() => onFeedback(item.id, 'too_high')}
+              >评分过高</Button>
+              <Button
+                size="small"
+                loading={rowState.saving}
+                danger
+                type={activeDirection === 'too_low' ? 'primary' : 'default'}
+                onClick={() => onFeedback(item.id, 'too_low')}
+              >评分过低</Button>
+              {rowState.status && <Text type="secondary">{rowState.status}</Text>}
+              {rowState.error && <Text type="danger">保存失败：{rowState.error}</Text>}
+            </Space>
+          </Flex>
         </div>
       </Flex>
     </Card>
@@ -683,7 +695,7 @@ function SelectPage() {
         })}
       </Content>
       <Footer className="select-action-bar">
-        <Space size={8} wrap>
+        <Space size={12} wrap align="center">
           <span>已选 {countNode} / {TARGET}</span>
           <Button disabled={done} onClick={selectAll}>全选</Button>
           <Button disabled={done} onClick={selectNone}>清空</Button>
