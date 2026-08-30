@@ -33,3 +33,6 @@ dist/
 
 # pi-subagents runtime scratch
 .pi-subagents/
+
+# Local agent config (bangboo)
+.pi/
