@@ -352,6 +352,7 @@ export async function runGenerate(
     updatedAt: now,
     selection: { status: 'confirmed' as const, selectedIds: selectedItems.map((item) => item.id), confirmedAt: now },
     scoreFeedbackById: {},
+    remarkById: {},
   };
   await finalizePublication({ draft: snapshot, ranking, curation, decision }, {
     readState: async () => publishedState,

@@ -20,7 +20,7 @@ const curation: CurationArtifact = { schemaVersion: 1, runId, date: ranking.date
 const decision: SelectionDecision = { schemaVersion: 1, runId, date: ranking.date, curationMode: ranking.curationMode,
   featureVersion: ranking.featureVersion, curationRevision: 'curation-a', revision: 2,
   updatedAt: '2026-08-27T10:00:00Z', selection: { status: 'confirmed', selectedIds: ['a'],
-    confirmedAt: '2026-08-27T10:00:00Z' }, scoreFeedbackById: {
+    confirmedAt: '2026-08-27T10:00:00Z' }, remarkById: {}, scoreFeedbackById: {
       a: { direction: 'too_low', updatedAt: '2026-08-27T09:00:00Z' },
     } };
 

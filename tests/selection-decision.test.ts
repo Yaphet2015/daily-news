@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import {
   confirmSelection,
   createPendingSelectionDecision,
+  decodeSelectionDecision,
   resolveSelectedItems,
+  updateRemark,
   updateScoreFeedback,
 } from '../src/selection-decision.js';
 import { SelectionDecisionStore } from '../src/selection-decision-store.js';
@@ -37,6 +39,34 @@ test('confirmed ids resolve in curation order and reject unknown ids', () => {
   const confirmed = confirmSelection(pending, ['b', 'a'], curation, '2026-08-27T10:00:00Z');
   assert.deepEqual(resolveSelectedItems(confirmed, curation).map((entry) => entry.id), ['a', 'b']);
   assert.throws(() => confirmSelection(pending, ['missing'], curation, '2026-08-27T10:00:00Z'), /unknown item/);
+});
+
+test('remark saves, trims, clears, and round-trips through decode', () => {
+  const pending = createPendingSelectionDecision(curation, '2026-08-27T09:00:00Z');
+  const noted = updateRemark(pending, { itemId: 'a', text: '  链接没解析  ', updatedAt: '2026-08-27T09:01:00Z' }, curation);
+  assert.equal(noted.remarkById.a?.text, '链接没解析');
+  assert.equal(noted.revision, 1);
+  const decoded = decodeSelectionDecision(JSON.parse(JSON.stringify(noted)));
+  assert.equal(decoded.remarkById.a?.text, '链接没解析');
+  const cleared = updateRemark(noted, { itemId: 'a', text: '   ', updatedAt: '2026-08-27T09:02:00Z' }, curation);
+  assert.deepEqual(cleared.remarkById, {});
+  assert.equal(cleared.revision, 2);
+  assert.deepEqual(cleared.scoreFeedbackById, {});
+});
+
+test('remark rejects unknown items and identity mismatch', () => {
+  const pending = createPendingSelectionDecision(curation, '2026-08-27T09:00:00Z');
+  assert.throws(() => updateRemark(pending, { itemId: 'missing', text: 'x', updatedAt: '2026-08-27T09:01:00Z' }, curation), /unknown item/);
+  assert.throws(() => updateRemark(
+    { ...pending, runId: 'run-other' },
+    { itemId: 'a', text: 'x', updatedAt: '2026-08-27T09:01:00Z' }, curation,
+  ), /identity mismatch/);
+});
+
+test('decode treats a legacy decision without remarkById as empty', () => {
+  const legacy = JSON.parse(JSON.stringify(createPendingSelectionDecision(curation, '2026-08-27T09:00:00Z')));
+  delete legacy.remarkById;
+  assert.deepEqual(decodeSelectionDecision(legacy).remarkById, {});
 });
 
 test('store serializes concurrent feedback updates', async () => {

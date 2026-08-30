@@ -22,7 +22,7 @@ const decision: SelectionDecision = { schemaVersion: 1, runId: 'run-a', date: '2
   curationMode: 'agent-curator', featureVersion: 'tag-signal-feedback-v1', curationRevision: 'curation-a',
   revision: 3, updatedAt: '2026-08-27T10:00:00Z',
   selection: { status: 'confirmed', selectedIds: ['b'], confirmedAt: '2026-08-27T10:00:00Z' },
-  scoreFeedbackById: { a: { direction: 'too_high', updatedAt: '2026-08-27T09:00:00Z' } } };
+  remarkById: {}, scoreFeedbackById: { a: { direction: 'too_high', updatedAt: '2026-08-27T09:00:00Z' } } };
 
 test('canonical report derives selection and explicit feedback from decision', () => {
   const report = buildSelectionReport({ ranking, curation, decision });

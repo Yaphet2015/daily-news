@@ -14,6 +14,7 @@ import type {
   FeedbackReview,
   FeedbackReviewItem,
   RankingArtifact,
+  ScoreFeedbackDirection,
   ScoreFeedbackHistoryEvent,
   SelectionDecision,
 } from './types.js';
@@ -64,15 +65,18 @@ export function decodeFeedbackReview(value: unknown): FeedbackReview {
   if (!Array.isArray(raw.items) || raw.items.length === 0) throw new Error('feedback review.items must not be empty');
   const items = raw.items.map((entry, index): FeedbackReviewItem => {
     const item = decodeObject(entry, `feedback review.items[${index}]`);
-    if (item.direction !== 'too_high' && item.direction !== 'too_low') throw new Error(`feedback review.items[${index}].direction is invalid`);
+    if (item.direction !== undefined && item.direction !== 'too_high' && item.direction !== 'too_low') {
+      throw new Error(`feedback review.items[${index}].direction is invalid`);
+    }
     if (typeof item.selectedByLlm !== 'boolean' || typeof item.selectedByHuman !== 'boolean') {
       throw new Error(`feedback review.items[${index}] selection flags are invalid`);
     }
     return {
       id: decodeNonEmptyString(item.id, `feedback review.items[${index}].id`),
       feedbackEventId: decodeNonEmptyString(item.feedbackEventId, `feedback review.items[${index}].feedbackEventId`),
-      direction: item.direction,
+      ...(item.direction === undefined ? {} : { direction: item.direction }),
       updatedAt: decodeNonEmptyString(item.updatedAt, `feedback review.items[${index}].updatedAt`),
+      ...(item.remark === undefined ? {} : { remark: decodeNonEmptyString(item.remark, `feedback review.items[${index}].remark`) }),
       text: decodeNonEmptyString(item.text, `feedback review.items[${index}].text`),
       textPreview: decodeNonEmptyString(item.textPreview, `feedback review.items[${index}].textPreview`),
       ...(item.linkedSource ? { linkedSource: decodeLinkedSource(item.linkedSource, `feedback review.items[${index}].linkedSource`) } : {}),
@@ -106,38 +110,44 @@ function eventId(runId: string, itemId: string, direction: string, updatedAt: st
 
 export function buildFeedbackReview(input: FeedbackReviewInput): FeedbackReview | null {
   const feedbackEntries = Object.entries(input.decision.scoreFeedbackById);
-  if (feedbackEntries.length === 0) return null;
+  const remarkEntries = Object.entries(input.decision.remarkById);
+  if (feedbackEntries.length === 0 && remarkEntries.length === 0) return null;
   assertIdentity(input);
   const curatedIds = new Set(input.curation.curatedItems.map((item) => item.id));
   const selectedIds = new Set(input.decision.selection.selectedIds);
-  const items = feedbackEntries.map(([id, feedback]): FeedbackReviewItem => {
-    const item = input.ranking.rankedItems.find((candidate) => candidate.id === id);
-    if (!item) throw new Error(`feedback item ${id} is absent from ranking`);
-    if (!item.contentTags || !item.tagMatches || !item.rankingSignals || !item.scoreFactors) {
-      throw new Error(`feedback item ${id} lacks structured scoring data`);
-    }
-    return {
-      id,
-      feedbackEventId: eventId(input.ranking.runId, id, feedback.direction, feedback.updatedAt),
-      direction: feedback.direction,
-      updatedAt: feedback.updatedAt,
-      text: [item.title, item.text, item.body, item.readerBrief?.summary,
-        item.linkedSource?.title, item.linkedSource?.description, item.linkedSource?.excerpt]
-        .filter(Boolean).join('\n\n'),
-      textPreview: preview([item.title, item.text, item.linkedSource?.title,
-        item.linkedSource?.description].filter(Boolean).join(' ')),
-      ...(item.linkedSource ? { linkedSource: item.linkedSource } : {}),
-      contentTags: item.contentTags,
-      tagMatches: item.tagMatches,
-      rankingSignals: item.rankingSignals,
-      scoreFactors: item.scoreFactors,
-      editorialScore: item.editorialScore,
-      engagementScore: item.engagementScore,
-      priorityScore: item.priorityScore,
-      selectedByLlm: curatedIds.has(id),
-      selectedByHuman: selectedIds.has(id),
-    };
-  });
+  const items = [...new Set([...feedbackEntries, ...remarkEntries].map(([id]) => id))]
+    .map((id): FeedbackReviewItem => {
+      const feedback = input.decision.scoreFeedbackById[id];
+      const remark = input.decision.remarkById[id];
+      const item = input.ranking.rankedItems.find((candidate) => candidate.id === id);
+      if (!item) throw new Error(`feedback item ${id} is absent from ranking`);
+      if (!item.contentTags || !item.tagMatches || !item.rankingSignals || !item.scoreFactors) {
+        throw new Error(`feedback item ${id} lacks structured scoring data`);
+      }
+      const updatedAt = feedback?.updatedAt ?? remark.updatedAt;
+      return {
+        id,
+        feedbackEventId: eventId(input.ranking.runId, id, feedback?.direction ?? 'remark', updatedAt),
+        ...(feedback ? { direction: feedback.direction } : {}),
+        updatedAt,
+        ...(remark ? { remark: remark.text } : {}),
+        text: [item.title, item.text, item.body, item.readerBrief?.summary,
+          item.linkedSource?.title, item.linkedSource?.description, item.linkedSource?.excerpt]
+          .filter(Boolean).join('\n\n'),
+        textPreview: preview([item.title, item.text, item.linkedSource?.title,
+          item.linkedSource?.description].filter(Boolean).join(' ')),
+        ...(item.linkedSource ? { linkedSource: item.linkedSource } : {}),
+        contentTags: item.contentTags,
+        tagMatches: item.tagMatches,
+        rankingSignals: item.rankingSignals,
+        scoreFactors: item.scoreFactors,
+        editorialScore: item.editorialScore,
+        engagementScore: item.engagementScore,
+        priorityScore: item.priorityScore,
+        selectedByLlm: curatedIds.has(id),
+        selectedByHuman: selectedIds.has(id),
+      };
+    });
   return {
     schemaVersion: 1,
     runId: input.ranking.runId,
@@ -154,23 +164,28 @@ export function buildFeedbackReview(input: FeedbackReviewInput): FeedbackReview 
 export function buildScoreFeedbackHistoryEvents(input: FeedbackReviewInput): ScoreFeedbackHistoryEvent[] {
   const review = buildFeedbackReview(input);
   if (!review) return [];
-  return review.items.map((item) => ({
-    schemaVersion: 1,
-    runId: review.runId,
-    date: review.date,
-    curationMode: review.curationMode,
-    featureVersion: review.featureVersion,
-    feedbackEventId: item.feedbackEventId,
-    curationRevision: review.curationRevision,
-    selectionDecisionRevision: review.selectionDecisionRevision,
-    policyRevision: review.policyRevision,
-    itemId: item.id,
-    direction: item.direction,
-    updatedAt: item.updatedAt,
-    textPreview: item.textPreview,
-    contentTags: item.contentTags,
-    tagMatches: item.tagMatches,
-    rankingSignals: item.rankingSignals,
-    scoreFactors: item.scoreFactors,
-  }));
+  // History records score-direction events only; remark-only entries stay in the review.
+  return review.items
+    .filter((item): item is FeedbackReviewItem & { direction: ScoreFeedbackDirection } =>
+      item.direction !== undefined)
+    .map((item) => ({
+      schemaVersion: 1,
+      runId: review.runId,
+      date: review.date,
+      curationMode: review.curationMode,
+      featureVersion: review.featureVersion,
+      feedbackEventId: item.feedbackEventId,
+      curationRevision: review.curationRevision,
+      selectionDecisionRevision: review.selectionDecisionRevision,
+      policyRevision: review.policyRevision,
+      itemId: item.id,
+      direction: item.direction,
+      updatedAt: item.updatedAt,
+      ...(item.remark ? { remark: item.remark } : {}),
+      textPreview: item.textPreview,
+      contentTags: item.contentTags,
+      tagMatches: item.tagMatches,
+      rankingSignals: item.rankingSignals,
+      scoreFactors: item.scoreFactors,
+    }));
 }

@@ -29,6 +29,7 @@ export function createPendingSelectionDecision(
     updatedAt,
     selection: { status: 'pending', selectedIds: [] },
     scoreFeedbackById: {},
+    remarkById: {},
   };
 }
 
@@ -50,6 +51,13 @@ export function decodeSelectionDecision(value: unknown): SelectionDecision {
     return [id, { direction: entry.direction as ScoreFeedbackDirection,
       updatedAt: decodeNonEmptyString(entry.updatedAt, `selection decision.scoreFeedbackById.${id}.updatedAt`) }];
   }));
+  // Legacy decisions (pre-remark) lack remarkById entirely; treat that as empty rather than fail.
+  const remarkRaw = raw.remarkById === undefined ? {} : decodeObject(raw.remarkById, 'selection decision.remarkById');
+  const remarkById = Object.fromEntries(Object.entries(remarkRaw).map(([id, value]) => {
+    const entry = decodeObject(value, `selection decision.remarkById.${id}`);
+    return [id, { text: decodeNonEmptyString(entry.text, `selection decision.remarkById.${id}.text`),
+      updatedAt: decodeNonEmptyString(entry.updatedAt, `selection decision.remarkById.${id}.updatedAt`) }];
+  }));
   return {
     ...identity,
     curationRevision,
@@ -61,6 +69,7 @@ export function decodeSelectionDecision(value: unknown): SelectionDecision {
       ...(selection.confirmedAt ? { confirmedAt: decodeNonEmptyString(selection.confirmedAt, 'selection confirmedAt') } : {}),
     },
     scoreFeedbackById,
+    remarkById,
   };
 }
 
@@ -75,6 +84,20 @@ export function updateScoreFeedback(
   if (scoreFeedbackById[input.itemId]?.direction === input.direction) delete scoreFeedbackById[input.itemId];
   else scoreFeedbackById[input.itemId] = { direction: input.direction, updatedAt: input.updatedAt };
   return { ...decision, revision: decision.revision + 1, updatedAt: input.updatedAt, scoreFeedbackById };
+}
+
+export function updateRemark(
+  decision: SelectionDecision,
+  input: { itemId: string; text: string; updatedAt: string },
+  curation: CurationArtifact,
+): SelectionDecision {
+  assertIdentity(decision, curation);
+  if (!curation.curatedItems.some((item) => item.id === input.itemId)) throw new Error(`unknown item ${input.itemId}`);
+  const text = input.text.trim();
+  const remarkById = { ...decision.remarkById };
+  if (text.length === 0) delete remarkById[input.itemId];
+  else remarkById[input.itemId] = { text, updatedAt: input.updatedAt };
+  return { ...decision, revision: decision.revision + 1, updatedAt: input.updatedAt, remarkById };
 }
 
 export function confirmSelection(

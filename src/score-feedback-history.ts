@@ -34,6 +34,7 @@ export function decodeScoreFeedbackHistoryEvent(value: unknown): ScoreFeedbackHi
     itemId: decodeNonEmptyString(raw.itemId, 'itemId'),
     direction: raw.direction,
     updatedAt: decodeNonEmptyString(raw.updatedAt, 'updatedAt'),
+    ...(raw.remark === undefined ? {} : { remark: decodeNonEmptyString(raw.remark, 'remark') }),
     textPreview: decodeNonEmptyString(raw.textPreview, 'textPreview'),
     contentTags: decodeContentTagIds(raw.contentTags, 'contentTags'),
     tagMatches: decodeContentTagMatches(raw.tagMatches, 'tagMatches'),

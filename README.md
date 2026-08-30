@@ -34,7 +34,7 @@ npm run preferences:review
 
 `generate` 在人工 `select` 确认后会把本次全候选结构化特征和最终选择结果追加到本机私有历史。`preferences:update` 会回填历史 `selection-report` 并生成偏好画像和建议；`preferences:review` 只把你勾选确认的建议写入生效规则。
 
-Agent HTML select 还提供独立的 `评分过高` / `评分过低` 按钮。每次点击立即写入 `output/<date>-selection-decision.json`，不依赖是否勾选发布。publish 后，有反馈时生成 `feedback-review.json` 并追加 `data/score-feedback-history.jsonl`。Agent 按内容 Tag 归因，写出受约束的 `feedback-adjustment.json`，再运行 `feedback-apply --date=<date>`。按钮反馈不会修改作者、域名、来源开关或 `@tom_doerr` hard filter。
+Agent HTML select 还提供独立的 `评分过高` / `评分过低` 按钮，以及每张卡片右侧的自由文本 `备注` 输入框（失焦即保存，空文本删除，刷新后回显）。备注与评分方向相互独立：评分类备注（如“这个作者应降权”）进入 `feedback-review.json` 并参与既有约束调整流；采集/解析类备注（如“链接没解析”）触发 Agent 排查采集代码并抛出修改 Plan。每次点击或备注保存立即写入 `output/<date>-selection-decision.json`，不依赖是否勾选发布。publish 后，有反馈或备注时生成 `feedback-review.json` 并追加 `data/score-feedback-history.jsonl`（仅方向事件，备注文本随事件附带；纯备注只进 review）。Agent 按内容 Tag 归因，写出受约束的 `feedback-adjustment.json`，再运行 `feedback-apply --date=<date>`。按钮与备注反馈都不会修改作者、域名、来源开关或 `@tom_doerr` hard filter。
 
 select 页 UI 已接入 Ant Design：页面由 antd v5 组件（Layout / Card / Checkbox / Tag / Button / Alert 等）渲染，不写自定义样式，使用 antd 默认主题（跟随系统深色模式切换 dark 算法）；antd 与 React 通过 CDN 固定版本加载，页面需要联网打开。终端版 `select` 保持不变。
 

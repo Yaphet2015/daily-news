@@ -392,6 +392,7 @@ export function buildSelectHtml(curation, serverOrigin, decision = null) {
     curationRevision: curation.curationRevision,
     decisionRevision: decision?.revision ?? 0,
     scoreFeedbackById: decision?.scoreFeedbackById ?? {},
+    remarkById: decision?.remarkById ?? {},
     serverOrigin,
     targetMin: DEFAULT_SELECT_TARGET_MIN,
     targetMax: DEFAULT_SELECT_TARGET_MAX,
@@ -435,9 +436,9 @@ export function buildSelectHtml(curation, serverOrigin, decision = null) {
 </script>
 <script type="text/babel" data-presets="react">
 const DATA = ${dataJson};
-const { useState } = React;
+const { useState, useEffect } = React;
 const {
-  Alert, App, Button, Card, Checkbox, ConfigProvider, Divider, Flex, Image, Layout, Space, Tag, Typography, theme,
+  Alert, App, Button, Card, Checkbox, ConfigProvider, Divider, Flex, Image, Input, Layout, Space, Tag, Typography, theme,
 } = antd;
 const { Title, Text, Paragraph, Link } = Typography;
 const { Content, Footer } = Layout;
@@ -480,8 +481,25 @@ function RootApp() {
   );
 }
 
-function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle, onFeedback }) {
+function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle, onFeedback, remark, onRemark }) {
   const photos = (Array.isArray(item.media) ? item.media : []).filter((m) => m.type === 'photo').slice(0, 4);
+  // Free-text remark: local draft while typing; saved to the decision file on blur (empty text deletes).
+  const [remarkDraft, setRemarkDraft] = useState(remark?.text ?? '');
+  const [remarkState, setRemarkState] = useState({ saving: false, status: '', error: '' });
+  // Keep the draft in sync with the confirmed remark (e.g. after the mount-time /decision
+  // restore on reload). Draft only diverges while typing; blur re-syncs via saveRemark.
+  useEffect(() => { setRemarkDraft(remark?.text ?? ''); }, [remark?.text]);
+  async function saveRemark() {
+    const text = remarkDraft.trim();
+    if (text === (remark?.text ?? '')) return; // unchanged — do not bump the decision revision
+    setRemarkState({ saving: true, status: '保存中…', error: '' });
+    try {
+      await onRemark(item.id, text);
+      setRemarkState({ saving: false, status: text ? '已保存' : '已删除', error: '' });
+    } catch (err) {
+      setRemarkState({ saving: false, status: '', error: err.message });
+    }
+  }
   // One quiet meta line instead of a wall of same-looking tags: source · author · thread · teaser.
   const metaParts = [item.source, item.attribution || item.author];
   if (item.threadPartCount) metaParts.push('thread · ' + item.threadPartCount);
@@ -490,6 +508,7 @@ function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle
     <Card size="small" style={{ marginBottom: 12 }}>
       <Flex align="flex-start" gap={10}>
         <Checkbox
+          id={'select-item-' + item.id}
           style={{ marginTop: 3 }}
           checked={checked}
           disabled={disabled}
@@ -497,7 +516,11 @@ function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <Flex align="baseline" gap={8} wrap>
-            <Title level={5} style={{ margin: 0, flex: '1 1 auto' }}>{item.title}</Title>
+            <Title level={5} style={{ margin: 0, flex: '1 1 auto' }}>
+              <label htmlFor={'select-item-' + item.id} style={{ cursor: disabled ? 'default' : 'pointer' }}>
+                {item.title}
+              </label>
+            </Title>
             {typeof item.priorityScore === 'number' && (
               <Tag color="blue" style={{ marginInlineEnd: 0, flex: '0 0 auto' }}>优先级 {item.priorityScore}</Tag>
             )}
@@ -556,6 +579,19 @@ function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle
             </Space>
           </Flex>
         </div>
+        <div style={{ flex: '0 0 232px', width: 232 }}>
+          <Input.TextArea
+            value={remarkDraft}
+            onChange={(e) => setRemarkDraft(e.target.value)}
+            onBlur={saveRemark}
+            disabled={disabled}
+            maxLength={500}
+            autoSize={{ minRows: 3, maxRows: 8 }}
+            placeholder="备注：链接没解析 / 作者话题应降权…（失焦保存）"
+          />
+          {remarkState.status && <Text type="secondary" style={{ fontSize: 12 }}>{remarkState.status}</Text>}
+          {remarkState.error && <Text type="danger" style={{ fontSize: 12 }}>保存失败：{remarkState.error}</Text>}
+        </div>
       </Flex>
     </Card>
   );
@@ -566,9 +602,26 @@ function SelectPage() {
   const [checkedIds, setCheckedIds] = useState(restoreSelection);
   const [revision, setRevision] = useState(DATA.decisionRevision);
   const [confirmedFeedback, setConfirmedFeedback] = useState({ ...DATA.scoreFeedbackById });
+  const [remarks, setRemarks] = useState({ ...DATA.remarkById });
   const [rowStates, setRowStates] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+
+  // The served HTML embeds only the server-start snapshot; the decision file is SSOT. On mount,
+  // re-fetch it so a page reload restores confirmed feedback and remarks saved earlier.
+  useEffect(() => {
+    fetch(DATA.serverOrigin + '/decision')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.ok || !data.decision) return;
+        const d = data.decision;
+        if (d.runId !== DATA.runId || d.curationRevision !== DATA.curationRevision) return; // stale tab of another run
+        setRevision(d.revision);
+        setConfirmedFeedback({ ...d.scoreFeedbackById });
+        setRemarks({ ...(d.remarkById ?? {}) });
+      })
+      .catch(() => { /* server stopped or offline: keep the embedded snapshot */ });
+  }, []);
 
   const checked = new Set(checkedIds);
   const count = checkedIds.length;
@@ -611,6 +664,25 @@ function SelectPage() {
     } catch (err) {
       setRowStates((prev) => ({ ...prev, [itemId]: { saving: false, status: '', error: err.message } }));
     }
+  }
+  async function sendRemark(itemId, text) {
+    const res = await fetch(DATA.serverOrigin + '/remark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        date: DATA.date,
+        runId: DATA.runId,
+        curationRevision: DATA.curationRevision,
+        revision,
+        itemId,
+        text,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    setRevision(data.decision.revision);
+    setConfirmedFeedback({ ...data.decision.scoreFeedbackById });
+    setRemarks({ ...data.decision.remarkById });
   }
   async function confirmSelection() {
     if (count === 0) { message.error('未选择任何条目'); return; }
@@ -688,6 +760,8 @@ function SelectPage() {
                   rowState={rowStates[it.id] || {}}
                   onToggle={toggleItem}
                   onFeedback={sendFeedback}
+                  remark={remarks[it.id]}
+                  onRemark={sendRemark}
                 />
               ))}
             </section>
@@ -1111,6 +1185,52 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
           res.end(JSON.stringify({ ok: true }));
           return;
         }
+        if (req.method === 'GET' && url.pathname === '/decision') {
+          // SSOT read-back: lets a reloaded page restore confirmed feedback and remarks.
+          try {
+            const decision = await decisionStore.read();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, decision }));
+            return;
+          } catch (error) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+            return;
+          }
+        }
+        if (req.method === 'POST' && url.pathname === '/remark') {
+          let payload;
+          try { payload = JSON.parse(await readRequestBody(req)); }
+          catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'invalid JSON body' })); return;
+          }
+          if (payload.date !== curation.date || payload.runId !== curation.runId ||
+              payload.curationRevision !== curation.curationRevision) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'remark identity mismatch' })); return;
+          }
+          if (typeof payload.itemId !== 'string' || payload.itemId.length === 0 ||
+              typeof payload.text !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'invalid remark payload' })); return;
+          }
+          if (payload.text.length > 500) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'remark exceeds 500 characters' })); return;
+          }
+          try {
+            const decision = await decisionStore.update((current) =>
+              pipeline.selectionDecisionModule.updateRemark(current, {
+                itemId: payload.itemId, text: payload.text, updatedAt: new Date().toISOString(),
+              }, curation));
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, decision })); return;
+          } catch (error) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })); return;
+          }
+        }
         if (req.method === 'POST' && url.pathname === '/feedback') {
           let payload;
           try { payload = JSON.parse(await readRequestBody(req)); }
@@ -1374,15 +1494,17 @@ export async function runPublish({ pipeline, repoRoot, log }) {
     },
   );
 
+  const remarkCount = result.review ? result.review.items.filter((it) => it.remark).length : 0;
+
   return [
     'daily-news publish: complete',
     `Date: ${date}`,
     `Selected items: ${result.selectedItems.length}`,
     `Substack draft: output/${date}-substack.html`,
     `Selection report: output/${date}-selection-report.json`,
-    result.feedbackCount === 0
-      ? '本期无评分反馈'
-      : `Feedback review: output/${date}-feedback-review.json`,
+    result.review
+      ? `Feedback review: output/${date}-feedback-review.json（评分反馈 ${result.feedbackCount} 条，备注 ${remarkCount} 条）`
+      : '本期无评分反馈和备注',
     'State advanced and pending draft cleared.',
   ].join('\n');
 }

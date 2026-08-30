@@ -281,6 +281,11 @@ export interface ScoreFeedbackEntry {
   updatedAt: string;
 }
 
+export interface RemarkEntry {
+  text: string;
+  updatedAt: string;
+}
+
 export interface SelectionDecision extends ArtifactIdentity<1> {
   curationRevision: string;
   revision: number;
@@ -291,6 +296,7 @@ export interface SelectionDecision extends ArtifactIdentity<1> {
     confirmedAt?: string;
   };
   scoreFeedbackById: Record<string, ScoreFeedbackEntry>;
+  remarkById: Record<string, RemarkEntry>;
 }
 
 export interface SelectionReport {
@@ -305,8 +311,11 @@ export interface SelectionReport {
 export interface FeedbackReviewItem {
   id: string;
   feedbackEventId: string;
-  direction: ScoreFeedbackDirection;
+  /** Score-direction feedback; undefined for remark-only entries. */
+  direction?: ScoreFeedbackDirection;
   updatedAt: string;
+  /** Free-text human remark collected on the select page. */
+  remark?: string;
   text: string;
   textPreview: string;
   linkedSource?: LinkedSource;
@@ -336,6 +345,7 @@ export interface ScoreFeedbackHistoryEvent extends ArtifactIdentity<1> {
   itemId: string;
   direction: ScoreFeedbackDirection;
   updatedAt: string;
+  remark?: string;
   textPreview: string;
   contentTags: ContentTagId[];
   tagMatches: ContentTagMatch[];
