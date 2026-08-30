@@ -14,6 +14,7 @@ data/preference-history.jsonl
 data/preference-profile.json
 data/preference-suggestions.json
 data/preference-rules.json
+data/score-feedback-history.jsonl
 
 # IDE
 .cursor/
