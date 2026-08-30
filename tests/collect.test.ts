@@ -960,6 +960,38 @@ test('buildRecommendationTopicGatePrompt includes confirmed preference hints wit
   assert.equal(parsed.items[0]?.textPreview.length, 500);
 });
 
+test('collapseSameIdItems keeps the list copy when list and for-you share an id', () => {
+  const collapseSameIdItems = (collectModule as Record<string, Function>).collapseSameIdItems;
+  assert.equal(typeof collapseSameIdItems, 'function');
+
+  const shared = {
+    source: 'twitter',
+    text: 'Grok Bot added an X connector.',
+    publishedAt: '2026-08-30T00:32:43Z',
+    url: 'https://x.com/vista8/status/2093859425085968753',
+    author: { name: '向阳乔木', username: 'vista8' },
+    media: [],
+  };
+  const collapsed = collapseSameIdItems([
+    { ...shared, id: '2093859425085968753', twitterFeed: 'for-you' },
+    { ...shared, id: '2093859425085968753', twitterFeed: 'list' },
+    {
+      ...shared,
+      id: 'other',
+      url: 'https://x.com/vista8/status/other',
+      twitterFeed: 'for-you',
+    },
+  ]);
+
+  assert.deepEqual(
+    collapsed.map((item: { id: string; twitterFeed?: string }) => ({ id: item.id, twitterFeed: item.twitterFeed })),
+    [
+      { id: '2093859425085968753', twitterFeed: 'list' },
+      { id: 'other', twitterFeed: 'for-you' },
+    ],
+  );
+});
+
 test('collectSources preserves source collection warnings alongside successful items', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).collectSources, 'function');
 

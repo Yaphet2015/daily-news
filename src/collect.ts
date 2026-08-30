@@ -11,6 +11,7 @@ import {
   readConfirmedPreferenceRules,
   type ConfirmedPreferenceRules,
 } from './preferences.js';
+import { collapseSameIdItems } from './collapse-same-id.js';
 import { DEFAULT_ENABLED_SOURCES, normalizeSourceNames } from './source-registry.js';
 import type { SourceName } from './source-registry.js';
 import type {
@@ -25,6 +26,8 @@ import type {
   SelfThreadPart,
   SourceResolution,
 } from './types.js';
+
+export { collapseSameIdItems };
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -2974,7 +2977,7 @@ export function buildUnresolvedQuoteWarning(
     .map((it) => it.quotedStatusUrl!)
     .filter(Boolean)
     .slice(0, 3)
-    .join('  ');
+    .join(' \n ');
   return (
     `Twitter quote 解析：共 ${quotes.length} 条带 quote，` +
     `${embeddedResolved} 条经嵌入文本本地解析，` +
@@ -3034,10 +3037,10 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
         ),
       })
     : { items: [], warnings: [] };
-  const filtered = [
+  const filtered = collapseSameIdItems([
     ...filterSinceTime(listItems, sinceTime).map((item) => ({ ...item, twitterFeed: 'list' as const })),
     ...recommendationResult.items,
-  ];
+  ]);
   const collapsed = collapseNumberedSelfThreads(filtered);
   if (process.env.DAILY_NEWS_SKIP_TWITTER_PRIMARY_SOURCE_RESOLUTION?.trim() === '1') {
     console.log(`[collect] 跳过 Twitter primary source 解析，共采集 ${collapsed.length} 条内容`);

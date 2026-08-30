@@ -1,3 +1,4 @@
+import { collapseSameIdItems } from './collapse-same-id.js';
 import type { CollectedItem, RankedItem, ScoreBreakdown } from './types.js';
 import {
   buildScoreFactors,
@@ -371,7 +372,7 @@ export function rankItems(
   items: CollectedItem[],
   preferenceRules: ConfirmedPreferenceRules = normalizeConfirmedPreferenceRules(null),
 ): RankedItem[] {
-  const eligibleItems = items.filter((item) => !isHardFilteredAuthor(item));
+  const eligibleItems = collapseSameIdItems(items.filter((item) => !isHardFilteredAuthor(item)));
   if (eligibleItems.length === 0) return [];
 
   const newestTimestamp = eligibleItems.reduce((latest, item) => {

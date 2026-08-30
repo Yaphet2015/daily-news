@@ -84,6 +84,27 @@ test('rankItems marks and penalizes weaker duplicates', () => {
   assert.ok((primary?.priorityScore ?? 0) > (duplicate?.priorityScore ?? 0));
 });
 
+test('rankItems collapses same-id list and for-you copies so ranking ids stay unique', () => {
+  const ranked = rankItems([
+    makeTwitterItem({
+      id: '2093859425085968753',
+      url: 'https://x.com/vista8/status/2093859425085968753',
+      twitterFeed: 'for-you',
+      text: 'Grok Bot added an X connector so it can search bookmarks and posts.',
+    }),
+    makeTwitterItem({
+      id: '2093859425085968753',
+      url: 'https://x.com/vista8/status/2093859425085968753',
+      twitterFeed: 'list',
+      text: 'Grok Bot added an X connector so it can search bookmarks and posts.',
+    }),
+  ]);
+
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0]?.id, '2093859425085968753');
+  assert.equal(ranked[0]?.twitterFeed, 'list');
+});
+
 test('engagement helps break ties but does not overcome weak substance', () => {
   const ranked = rankItems([
     makeTwitterItem({
