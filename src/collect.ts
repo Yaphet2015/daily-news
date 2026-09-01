@@ -327,9 +327,22 @@ function isKnownVideoDomain(hostname: string): boolean {
 }
 
 function hasDirectMediaExtension(pathname: string): boolean {
-  return /\.(?:mp4|m4v|mov|avi|wmv|webm|m3u8|mp3|wav|ogg|jpg|jpeg|png|gif|webp|svg)(?:$|[?#])/i.test(
+  return /\.(?:mp4|m4v|mov|avi|wmv|webm|m3u8|mp3|wav|ogg|jpg|jpeg|png|gif|webp|svg|pdf)(?:$|[?#])/i.test(
     pathname,
   );
+}
+
+function rewritePaperLandingUrl(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    const host = normalizeDomain(parsed.hostname);
+    if (host !== 'arxiv.org' && !host.endsWith('.arxiv.org')) return raw;
+    const match = parsed.pathname.match(/^\/pdf\/([^/]+?)(?:\.pdf)?$/i);
+    if (!match?.[1]) return raw;
+    return `https://arxiv.org/abs/${match[1]}`;
+  } catch {
+    return raw;
+  }
 }
 
 export function isLikelyPrimarySourceUrl(raw: string): boolean {
@@ -371,10 +384,16 @@ export function normalizeExternalUrl(raw: string): string | null {
   }
 }
 
+function canonicalizePrimarySourceUrl(raw: string): string | null {
+  const normalized = normalizeExternalUrl(rewritePaperLandingUrl(raw));
+  if (!normalized || !isLikelyPrimarySourceUrl(normalized)) return null;
+  return normalized;
+}
+
 function extractUrlsFromText(text: string): string[] {
   return extractRawUrlsFromText(text)
-    .map((value) => normalizeExternalUrl(value))
-    .flatMap((value) => (value && isLikelyPrimarySourceUrl(value) ? [value] : []));
+    .map((value) => canonicalizePrimarySourceUrl(value))
+    .flatMap((value) => (value ? [value] : []));
 }
 
 function extractRawUrlsFromText(text: string): string[] {
@@ -390,8 +409,8 @@ function dedupeUrls(urls: string[]): string[] {
 function extractStructuredUrls(urls: Array<string | undefined | null>): string[] {
   return dedupeUrls(
     urls
-      .map((url) => (typeof url === 'string' ? normalizeExternalUrl(url) : null))
-      .flatMap((url) => (url && isLikelyPrimarySourceUrl(url) ? [url] : [])),
+      .map((url) => (typeof url === 'string' ? canonicalizePrimarySourceUrl(url) : null))
+      .flatMap((url) => (url ? [url] : [])),
   );
 }
 
@@ -2115,13 +2134,34 @@ async function resolveShortUrlUncached(url: string, retries = 2): Promise<string
 
 const resolveShortUrl = resolveShortUrlUncached;
 
+function isOwnTweetStatusUrl(
+  item: Pick<CollectedItem, 'url' | 'originUrl'>,
+  candidate: string | undefined,
+): boolean {
+  if (!candidate) return false;
+  const normalized = normalizeTwitterStatusUrl(candidate);
+  if (!normalized) return false;
+  return normalized === normalizeTwitterStatusUrl(item.originUrl)
+    || normalized === normalizeTwitterStatusUrl(item.url);
+}
+
+function quotedStatusUrlUnlessOwn(
+  item: Pick<CollectedItem, 'url' | 'originUrl'>,
+  ...candidates: Array<string | null | undefined>
+): string | undefined {
+  for (const url of candidates) {
+    if (url && !isOwnTweetStatusUrl(item, url)) return url;
+  }
+  return undefined;
+}
+
 async function enrichTwitterTextCandidates(
-  item: Pick<CollectedItem, 'text' | 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>,
+  item: Pick<CollectedItem, 'text' | 'url' | 'originUrl' | 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>,
   resolveShortUrlImpl: (url: string) => Promise<string | null>,
 ): Promise<Pick<CollectedItem, 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>> {
   const outboundLinks = dedupeUrls(item.outboundLinks ?? []);
   let embeddedLinkedSource = item.embeddedLinkedSource;
-  let quotedStatusUrl = item.quotedStatusUrl;
+  let quotedStatusUrl = quotedStatusUrlUnlessOwn(item, item.quotedStatusUrl);
 
   if (outboundLinks.length > 0 && embeddedLinkedSource && quotedStatusUrl) {
     return { outboundLinks, embeddedLinkedSource, quotedStatusUrl };
@@ -2141,7 +2181,7 @@ async function enrichTwitterTextCandidates(
       continue;
     }
 
-    const normalizedExternal = normalizeExternalUrl(candidateUrl);
+    const normalizedExternal = canonicalizePrimarySourceUrl(candidateUrl);
     if (normalizedExternal) {
       outboundLinks.push(normalizedExternal);
       continue;
@@ -2152,7 +2192,7 @@ async function enrichTwitterTextCandidates(
     }
 
     if (!quotedStatusUrl) {
-      quotedStatusUrl = normalizeTwitterStatusUrl(candidateUrl) ?? quotedStatusUrl;
+      quotedStatusUrl = quotedStatusUrlUnlessOwn(item, normalizeTwitterStatusUrl(candidateUrl));
     }
   }
 
@@ -2248,9 +2288,8 @@ async function fetchSubstackText(url: string): Promise<string> {
 }
 
 async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
-  const normalizedUrl = normalizeExternalUrl(url);
+  const normalizedUrl = canonicalizePrimarySourceUrl(url);
   if (!normalizedUrl) return null;
-  if (!isLikelyPrimarySourceUrl(normalizedUrl)) return null;
 
   let stdout = '';
   try {
@@ -2789,7 +2828,11 @@ export async function resolveTwitterPrimarySource(
     ...item,
     outboundLinks: enrichedCandidates.outboundLinks,
     embeddedLinkedSource: enrichedCandidates.embeddedLinkedSource ?? item.embeddedLinkedSource,
-    quotedStatusUrl: enrichedCandidates.quotedStatusUrl ?? item.quotedStatusUrl,
+    quotedStatusUrl: quotedStatusUrlUnlessOwn(
+      item,
+      enrichedCandidates.quotedStatusUrl,
+      item.quotedStatusUrl,
+    ),
   };
   const tweetLinks = enrichedItem.outboundLinks ?? [];
 

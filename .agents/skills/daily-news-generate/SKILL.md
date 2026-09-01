@@ -139,8 +139,10 @@ can use/buy now · `Tutorial` = how-to, workflows, implementation guidance, tear
 **Faithfulness:** do not invent facts. Careful inference is allowed but must stay anchored to the source. If a post
 looks like showing off but reveals capability/progress/distribution/strategy, make that deeper signal explicit.
 Treat media metadata as "a visual exists", not pixel-level knowledge. For Substack, use the body text provided; do
-not invent beyond it. If you need more detail on an item, you may fetch its URL — but the published summary must
-stay faithful to what the source actually says.
+not invent beyond it. If a card is truncated, only has a `t.co`, or lacks method/data the summary needs, resolve and
+fetch the original (paper HTML abstract, blog, docs) **before** writing. Never put collection-limitation notes in the
+published summary (no 「帖文被截断」, 「没有给出方法名」, 「不能从推荐语发明」). If the original is still
+unreachable, write only facts on the card, or drop the item. Fetched text must stay faithful to the source.
 
 > If the file is large, you may curate in batches and merge into one `curate-output.json` between batches — the
 > stage is recoverable. Keep going until you've covered the high-signal pool.

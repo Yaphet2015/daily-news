@@ -120,6 +120,27 @@ test('isLikelyPrimarySourceUrl only accepts external articles/pages and X articl
   assert.equal(isLikelyPrimarySourceUrl('https://x.com/i/article/2034035257553690624'), true);
   assert.equal(isLikelyPrimarySourceUrl('https://x.com/aiedge_/status/2036815449225298369'), false);
   assert.equal(isLikelyPrimarySourceUrl('https://www.youtube.com/watch?v=123'), false);
+  assert.equal(
+    isLikelyPrimarySourceUrl('https://www-cdn.anthropic.com/paper/automated-alignment-researchers-august-2026.pdf'),
+    false,
+  );
+});
+
+test('mapTwitterCliTweet rewrites arXiv PDF links to the HTML abstract page', () => {
+  const tweet = collectModule.mapTwitterCliTweet({
+    id: 'arxiv-pdf',
+    text: 'Banger paper from Stanford https://t.co/paper',
+    author: {
+      id: 'u-arxiv',
+      name: 'elvis',
+      screenName: 'omarsar0',
+    },
+    createdAt: '2026-08-30T19:00:00Z',
+    media: [],
+    urls: ['https://arxiv.org/pdf/2608.26701'],
+  } as never);
+
+  assert.deepEqual(tweet.outboundLinks, ['https://arxiv.org/abs/2608.26701']);
 });
 
 test('mapTwitterCliTweet preserves mixed media from twitter-cli', () => {
@@ -1481,6 +1502,44 @@ test('resolveTwitterPrimarySource resolves text-only t.co links into outboundLin
   assert.deepEqual(resolved.outboundLinks, ['https://docs.example.com/launch']);
   assert.equal(resolved.url, 'https://docs.example.com/launch');
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'tweet_wrapper' });
+});
+
+test('resolveTwitterPrimarySource does not treat a t.co that resolves to the same tweet as a quote', async () => {
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const originUrl = 'https://x.com/omarsar0/status/2094109398604099888';
+  let quotedLookups = 0;
+
+  const resolved = await resolveTwitterPrimarySource(
+    {
+      id: '2094109398604099888',
+      source: 'twitter',
+      text:
+        'Banger paper from Stanford on efficient test-time scaling.\n\nLong reasoning keeps the entire trace in memory.\nhttps://t.co/VEM4i9oC8p',
+      publishedAt: '2026-08-30T19:00:00Z',
+      url: originUrl,
+      originUrl,
+      author: { name: 'elvis', username: 'omarsar0' },
+      media: [],
+      outboundLinks: [],
+    },
+    {
+      resolveShortUrl: async () => originUrl,
+      fetchQuotedPrimarySource: async () => {
+        quotedLookups += 1;
+        throw new Error('should not look up the tweet as its own quote');
+      },
+      fetchLinkedPage: async () => {
+        throw new Error('should not fetch a linked page');
+      },
+      fetchTwitterReplies: async () => [],
+    },
+  );
+
+  assert.equal(quotedLookups, 0);
+  assert.notEqual(resolved.quotedStatusUrl, originUrl);
+  assert.equal(resolved.url, originUrl);
+  assert.equal(resolved.linkedSource, undefined);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'keep_origin', reason: 'no_linked_source' });
 });
 
 test('resolveTwitterPrimarySource prefers quoted X article sources over reply lookup', async () => {
