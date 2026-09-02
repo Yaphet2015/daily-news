@@ -143,6 +143,9 @@ not invent beyond it. If a card is truncated, only has a `t.co`, or lacks method
 fetch the original (paper HTML abstract, blog, docs) **before** writing. Never put collection-limitation notes in the
 published summary (no 「帖文被截断」, 「没有给出方法名」, 「不能从推荐语发明」). If the original is still
 unreachable, write only facts on the card, or drop the item. Fetched text must stay faithful to the source.
+When `sourceResolution.reason` is `quote_wrapper` or `embedded_quote_wrapper`, `author` is the **quoted** account
+(from `quotedStatusUrl`). Tweet `text` is the wrapper's commentary; `linkedSource` is the article. Do **not** write
+that the quoting account wrote the article. Summarize the linked source; treat wrapper text as commentary only.
 
 > If the file is large, you may curate in batches and merge into one `curate-output.json` between batches — the
 > stage is recoverable. Keep going until you've covered the high-signal pool.

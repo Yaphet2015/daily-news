@@ -1587,6 +1587,49 @@ test('resolveTwitterPrimarySource prefers quoted X article sources over reply lo
   });
   assert.deepEqual(resolved.replyContext, []);
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
+  assert.equal(resolved.author.username, 'aiedge_');
+  assert.notEqual(resolved.author.username, 'alice');
+});
+
+test('quote_wrapper does not attribute the linked article to the quoting account', async () => {
+  // 2026-09-01: @dotey quoted @jowaywang's X article. Collect swapped the URL to the article
+  // but kept author=@dotey, so the digest treated 宝玉 as the essayist. Wrapper commentary
+  // is not authorship; the quoted status URL is the article author's account.
+  const resolveTwitterPrimarySource = collectModule.resolveTwitterPrimarySource;
+  const originUrl = 'https://x.com/dotey/status/2094526075682660617';
+  const resolved = await resolveTwitterPrimarySource({
+    id: '2094526075682660617',
+    source: 'twitter',
+    text: '“代码产出水平方差反而比以往更大”，这确实是真实存在的现象。',
+    publishedAt: '2026-09-01T00:00:00Z',
+    url: originUrl,
+    originUrl,
+    author: { name: '宝玉', username: 'dotey' },
+    media: [],
+    outboundLinks: [],
+    quotedStatusUrl: 'https://x.com/jowaywang/status/2093682461737967822',
+  }, {
+    resolveShortUrl: async () => null,
+    fetchQuotedPrimarySource: async (url: string) => {
+      assert.equal(url, 'https://x.com/jowaywang/status/2093682461737967822');
+      return {
+        url: 'https://x.com/i/article/2093682363314155520',
+        title: '尽职编程：AI Coding 时代的个体产出差异的来源',
+        description: 'X article',
+        domain: 'x.com',
+        via: 'quote',
+      };
+    },
+    fetchTwitterReplies: async () => {
+      throw new Error('should not fetch replies');
+    },
+  });
+
+  assert.equal(resolved.url, 'https://x.com/i/article/2093682363314155520');
+  assert.equal(resolved.originUrl, originUrl);
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
+  assert.equal(resolved.author.username, 'jowaywang');
+  assert.notEqual(resolved.author.username, 'dotey');
 });
 
 test('mapTwitterCliTweet preserves the embedded quoted tweet text for local source resolution', () => {
@@ -1636,6 +1679,7 @@ test('resolveTwitterPrimarySource resolves the quoted article from embedded quot
   assert.equal(resolved.url, 'https://arxiv.org/abs/2401.12345');
   assert.equal(resolved.linkedSource?.url, 'https://arxiv.org/abs/2401.12345');
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' });
+  assert.equal(resolved.author.username, 'jonasgeiping');
 });
 
 test('resolveTwitterPrimarySource falls back to the network quote lookup when embedded quote text has no link', async () => {
@@ -1667,6 +1711,7 @@ test('resolveTwitterPrimarySource falls back to the network quote lookup when em
   assert.ok(networkCalled, 'network quote lookup should run when embedded text has no link');
   assert.equal(resolved.url, 'https://example.com/article');
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quote_wrapper' });
+  assert.equal(resolved.author.username, 'jonasgeiping');
 });
 
 test('resolveTwitterPrimarySource still resolves embedded quote text when the enrichment breaker has tripped', async () => {
@@ -1699,6 +1744,7 @@ test('resolveTwitterPrimarySource still resolves embedded quote text when the en
 
   assert.equal(resolved.url, 'https://arxiv.org/abs/2401.999');
   assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'embedded_quote_wrapper' });
+  assert.equal(resolved.author.username, 'jonasgeiping');
 });
 
 test('buildUnresolvedQuoteWarning reports how many quotes failed to resolve, with samples', () => {
