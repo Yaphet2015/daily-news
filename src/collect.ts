@@ -211,6 +211,7 @@ interface CollectSubstackItemsOptions {
   deps?: {
     fetchPublicSubstackPublications?: typeof fetchPublicSubstackPublications;
     fetchPublicationFeed?: typeof fetchPublicationFeed;
+    fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
   };
 }
 
@@ -1264,9 +1265,33 @@ export function extractSubstackRoundupEntries(parent: CollectedItem): CollectedI
   return items;
 }
 
+function shouldFetchRoundupDestination(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return !isTwitterDomain(host) && normalizeDomain(host) !== 'mobile.twitter.com';
+  } catch {
+    return false;
+  }
+}
+
+async function attachRoundupDestinationSource(
+  child: CollectedItem,
+  fetchPage: (url: string) => Promise<LinkedSource | null>,
+): Promise<CollectedItem> {
+  if (!shouldFetchRoundupDestination(child.url)) return child;
+  const linkedSource = await fetchPage(child.url);
+  if (!linkedSource) return child;
+  return {
+    ...child,
+    linkedSource,
+    sourceResolution: { decision: 'use_linked_source', reason: 'roundup_destination' },
+  };
+}
+
 async function expandSubstackRoundupItems(
   items: CollectedItem[],
   fetchPostHtml: (url: string) => Promise<string> = fetchSubstackText,
+  fetchPage: (url: string) => Promise<LinkedSource | null> = fetchLinkedPage,
 ): Promise<CollectedItem[]> {
   const expanded: CollectedItem[] = [];
 
@@ -1286,7 +1311,9 @@ async function expandSubstackRoundupItems(
       }
     }
 
-    expanded.push(...children);
+    expanded.push(
+      ...(await Promise.all(children.map((child) => attachRoundupDestinationSource(child, fetchPage)))),
+    );
   }
 
   return expanded;
@@ -3292,7 +3319,11 @@ export async function collectSubstackItems({
   }
 
   const parents = sortNewestFirst(items).slice(0, maxPosts);
-  const expanded = await expandSubstackRoundupItems(parents);
+  const expanded = await expandSubstackRoundupItems(
+    parents,
+    fetchSubstackText,
+    createLinkedPageFetcher(deps?.fetchLinkedPage ?? fetchLinkedPage),
+  );
   console.log(`[collect] Substack 完成，共采集 ${parents.length} 篇文章，展开 ${expanded.length - parents.length} 条 roundup 子项`);
   return sortNewestFirst(expanded);
 }

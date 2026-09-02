@@ -184,8 +184,9 @@ output/YYYY-MM-DD-substack.html
 2. 系统会保留整篇 Ben's Bites newsletter 作为原始 Substack 条目
 3. 如果文章正文里存在稳定的 `heading + bullet list` roundup 结构，会额外把其中每条 bullet 展开成独立子条目
 4. 展开后的子条目会在 `select` 阶段平铺显示，保留 newsletter 原文链接作为 `originUrl`，并把 bullet 中的外部链接作为最终 `url`
-5. 面向读者的 `来源` 使用 bullet 外部链接的锚文本；锚文本为空时退回外部链接域名，不显示 Ben's Bites 这条采集渠道
-6. 当前只对仓库显式配置为 roundup 的 publication 启用这套拆分逻辑，不会自动作用于所有 Substack
+5. 子条目会抓取目标文章（跳过 X/Twitter 状态链接）写入 `linkedSource`，打分用目标文而不是 bullet 短摘要，避免被标成低质量/弱证据
+6. 面向读者的 `来源` 使用 bullet 外部链接的锚文本；锚文本为空时退回外部链接域名，不显示 Ben's Bites 这条采集渠道
+7. 当前只对仓库显式配置为 roundup 的 publication 启用这套拆分逻辑，不会自动作用于所有 Substack
 
 ---
 
@@ -232,7 +233,7 @@ output/YYYY-MM-DD-substack.html
 - **Twitter source 归一化**：会先抽取 tweet 正文里的外链；必要时再看 1-3 条 replies。即使 tweet 本身较长，只要它仍明显是在转述/分发外链内容，最终条目的 `url` 也会切到外部页面；只有当 tweet 明显是独立分析且与外链上下文重叠很低时，才继续保留 X origin。原 tweet permalink 会保留在内部元数据与 selection report 中。**quote（被引推文）优先用 list payload 已带回的被引推文文本本地解析其外链文章**，避免为每条 quote 再发一次 X 请求（N+1，是 429 的主因）；嵌入文本无链接时才回退到单条抓取，且本地解析不走 X、不受 enrichment 熔断器影响。每次采集会统计 quote 解析情况，未解析的会带原文链接写入 `collectionWarnings` 供人工复核
 - **Substack 输入**：通过公开个人页枚举你 follow 的 publications，并与仓库内 pinned publications 合并，再抓取这些 publication 的公开 RSS，按 publication 限流后再全局排序截断
 - **公开 RSS 容错**：单个 publication 的 feed 若因为站点自身重定向、TLS 或超时异常而抓取失败，会打印带 publication/feed URL/代理信息的 warning，并继续处理其余 publications
-- **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接；最终发布的 `来源` 使用 bullet 外部链接的锚文本或域名，而不是 Ben's Bites
+- **Roundup 展开**：对显式配置为 roundup 的 publication，采集阶段会保留原 newsletter，同时按正文里的 `heading + bullet list` 结构展开子条目，并抓取目标文章供打分。当前 Ben's Bites 的子条目会被强制纳入 `select`，避免只保留整篇 newsletter 而错过其中的单条产品/教程/讨论链接；最终发布的 `来源` 使用 bullet 外部链接的锚文本或域名，而不是 Ben's Bites
 - **全文预读**：Substack 正文先由 `SUBSTACK_READER_MODEL` 读取并压缩为结构化 briefing，避免把整篇文章直接塞给主整理模型；同一份 briefing 会在排序和主整理之间复用。briefing 里的列表字段在模型返回 `null` 或缺失时会归一成空数组，`whyItMatters` 可为空字符串，不再因为单篇文章缺少 caveat/signals/why 而整次中断。若 RSS 只暴露订阅墙/预览内容，则保留该条用于审计，但跳过全文 briefing、排序降权，并在候选理由中标记 `订阅墙/预览内容`
 - **Tag + Ranking Signal 统一排序**：主整理前先把信息量、证据、新鲜度、可操作性、互动等量化为 Ranking Signal，再匹配受控内容 Tag，并统一生成 Score Factor。`decisionReasons` 只用于展示。confirmed overlay 对同一 Factor 只做一次 weight 替换。无 overlay 时保持原有分数和排序。互动仍只作为 Twitter 辅助信号；候选池上限为 `150`。正文很短但带主源外链的策展指针继续获得 substance 下限保护
 - **推荐流预筛**：X For You scope 更宽，进入 source resolution 和 ranking 前会先用快模型读取每条前 500 字，只保留 AI 模型、AI 产品、agent/devtools、ML research、AI infra、benchmark、AI 行业结构等相关内容

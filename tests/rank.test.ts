@@ -573,3 +573,41 @@ test('rankItems applies confirmed local preference rules as explainable adjustme
   assert.match(ranked[0]?.decisionReasons.join(' ') ?? '', /偏好作者:often selected practical builders/);
   assert.match(ranked.find((item) => item.id === 'rejected-domain')?.decisionReasons.join(' ') ?? '', /偏好域名:often rejected vague syndication/);
 });
+
+test('rankItems scores a Substack roundup child from the fetched destination, not the bullet teaser', () => {
+  const teaser = 'Droid rebuilt GDAL from scratch - 36% to 90% parity with an independent checker.';
+  const roundup = {
+    source: 'substack' as const,
+    kind: 'substack_roundup_entry' as const,
+    url: 'https://factory.ai/news/gdal',
+    publishedAt: '2026-09-01T12:00:00Z',
+    author: { name: "Ben's Bites" },
+    text: teaser,
+    media: [] as CollectedItem['media'],
+    forceSelect: true,
+  };
+  const bare = rankItems([{ ...roundup, id: 'bare-teaser' }])[0]!;
+  const fetched = rankItems([
+    {
+      ...roundup,
+      id: 'fetched-article',
+      linkedSource: {
+        url: 'https://factory.ai/news/gdal',
+        title: 'What it Takes for Coding Agents to Complete Large Software Tasks',
+        description: 'Agents rebuilt complex programs to near-parity.',
+        excerpt: 'A research agent rebuild of gdal. The model implemented, ran benchmarks, and reached 90 percent parity. The paper covers the agent workflow, dataset, and API for ProgramBench.',
+        domain: 'factory.ai',
+        via: 'tweet',
+      },
+      sourceResolution: { decision: 'use_linked_source', reason: 'roundup_destination' },
+    },
+  ])[0]!;
+
+  assert.ok(bare.decisionReasons.includes('低质量内容'), `teaser must stay 低质量内容, got: ${bare.decisionReasons.join(',')}`);
+  assert.ok(bare.decisionReasons.includes('弱证据'), `teaser must stay 弱证据, got: ${bare.decisionReasons.join(',')}`);
+  assert.ok(!fetched.decisionReasons.includes('低质量内容'), `fetched article must not be 低质量内容, got: ${fetched.decisionReasons.join(',')}`);
+  assert.ok(!fetched.decisionReasons.includes('弱证据'), `fetched article must not be 弱证据, got: ${fetched.decisionReasons.join(',')}`);
+  assert.ok(fetched.decisionReasons.includes('策展指针'));
+  assert.ok(fetched.priorityScore > bare.priorityScore,
+    `destination article must outrank the bullet (${fetched.priorityScore} vs ${bare.priorityScore})`);
+});

@@ -2564,6 +2564,7 @@ test("collectSubstackItems still includes pinned Ben's Bites when SUBSTACK_PUBLI
             },
           ],
         }),
+        fetchLinkedPage: async () => null,
       },
     });
 
@@ -2578,6 +2579,87 @@ test("collectSubstackItems still includes pinned Ben's Bites when SUBSTACK_PUBLI
       process.env.SUBSTACK_PUBLICATION_URL = originalPublicationUrl;
     }
   }
+});
+
+test("collectSubstackItems fetches a roundup child's destination article into linkedSource for ranking", async () => {
+  const collectSubstackItems = (collectModule as Record<string, Function>).collectSubstackItems;
+  const fetched: string[] = [];
+
+  const items = await collectSubstackItems({
+    sinceTime: Date.parse('2026-03-15T07:30:00Z') / 1000,
+    deps: {
+      fetchPublicSubstackPublications: async () => [
+        {
+          name: "Ben's Bites",
+          handle: 'bensbites',
+          slug: 'bensbites',
+          url: 'https://www.bensbites.com',
+          roundupMode: 'bullet_links',
+        },
+      ],
+      fetchPublicationFeed: async () => ({
+        publication: {
+          name: "Ben's Bites",
+          handle: 'bensbites',
+          slug: 'bensbites',
+          url: 'https://www.bensbites.com',
+          roundupMode: 'bullet_links',
+        },
+        posts: [
+          {
+            id: 'https://www.bensbites.com/p/build-your-ideas',
+            title: 'build your ideas',
+            subtitle: null,
+            body: 'newsletter body',
+            htmlBody: [
+              '<h3>My feed</h3><ul>',
+              '<li><p><a href="https://factory.ai/news/gdal">Droid rebuilt GDAL from scratch</a> - 36% to 90% parity.</p></li>',
+              '<li><p><a href="https://x.com/finkd/status/1">Meta coding agent</a> is out of beta.</p></li>',
+              '</ul>',
+            ].join(''),
+            truncatedBody: 'newsletter excerpt',
+            publishedAt: '2026-03-15T08:00:00.000Z',
+            url: 'https://www.bensbites.com/p/build-your-ideas',
+          },
+        ],
+      }),
+      fetchLinkedPage: async (url: string) => {
+        fetched.push(url);
+        if (url === 'https://factory.ai/news/gdal') {
+          return {
+            url,
+            title: 'What it Takes for Coding Agents to Complete Large Software Tasks',
+            description: 'Held to a standard of completion they wrote themselves, agents rebuilt complex programs to near-parity.',
+            excerpt: 'We asked Droid to rebuild gdal from scratch. The single agent wrote 17,000 lines and reproduced 36 percent. A multi-role system reached 90 percent behavioral parity against an independent checker on ProgramBench.',
+            domain: 'factory.ai',
+            via: 'tweet',
+          };
+        }
+        throw new Error(`should not fetch ${url}`);
+      },
+    },
+  });
+
+  const articleChild = items.find((item: { url: string }) => item.url === 'https://factory.ai/news/gdal');
+  const tweetChild = items.find((item: { url: string }) => item.url === 'https://x.com/finkd/status/1');
+  const parent = items.find((item: { kind?: string }) => item.kind === 'substack_post');
+
+  assert.deepEqual(fetched, ['https://factory.ai/news/gdal']);
+  assert.equal(articleChild?.kind, 'substack_roundup_entry');
+  assert.deepEqual(articleChild?.linkedSource, {
+    url: 'https://factory.ai/news/gdal',
+    title: 'What it Takes for Coding Agents to Complete Large Software Tasks',
+    description: 'Held to a standard of completion they wrote themselves, agents rebuilt complex programs to near-parity.',
+    excerpt: 'We asked Droid to rebuild gdal from scratch. The single agent wrote 17,000 lines and reproduced 36 percent. A multi-role system reached 90 percent behavioral parity against an independent checker on ProgramBench.',
+    domain: 'factory.ai',
+    via: 'tweet',
+  });
+  assert.deepEqual(articleChild?.sourceResolution, {
+    decision: 'use_linked_source',
+    reason: 'roundup_destination',
+  });
+  assert.equal(tweetChild?.linkedSource, undefined);
+  assert.equal(parent?.linkedSource, undefined);
 });
 
 test('collectSources merges source outputs newest-first and returns a collection snapshot', async () => {
