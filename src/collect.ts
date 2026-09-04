@@ -212,6 +212,7 @@ interface CollectSubstackItemsOptions {
     fetchPublicSubstackPublications?: typeof fetchPublicSubstackPublications;
     fetchPublicationFeed?: typeof fetchPublicationFeed;
     fetchLinkedPage?: (url: string) => Promise<LinkedSource | null>;
+    fetchRoundupTweet?: (url: string) => Promise<CollectedItem | null>;
   };
 }
 
@@ -1274,10 +1275,51 @@ function shouldFetchRoundupDestination(url: string): boolean {
   }
 }
 
+function isTwitterStatusUrl(url: string): boolean {
+  return extractTweetIdFromStatusUrl(url) !== null;
+}
+
+function tweetItemToRoundupLinkedSource(tweet: CollectedItem, destinationUrl: string): LinkedSource {
+  return {
+    url: tweet.url ?? destinationUrl,
+    title: tweet.author?.name ?? tweet.author?.username,
+    excerpt: (tweet.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1500),
+    domain: 'x.com',
+    via: 'tweet',
+  };
+}
+
+async function fetchRoundupTweetViaCli(url: string): Promise<CollectedItem | null> {
+  const tweetId = extractTweetIdFromStatusUrl(url);
+  if (!tweetId) return null;
+  const tweet = await fetchTwitterTweetViaCli(tweetId);
+  if (!tweet) return null;
+  return mapTwitterCliTweet(tweet);
+}
+
 async function attachRoundupDestinationSource(
   child: CollectedItem,
   fetchPage: (url: string) => Promise<LinkedSource | null>,
+  fetchRoundupTweet?: (url: string) => Promise<CollectedItem | null>,
 ): Promise<CollectedItem> {
+  if (isTwitterStatusUrl(child.url)) {
+    if (!fetchRoundupTweet) return child;
+    try {
+      const tweet = await fetchRoundupTweet(child.url);
+      const excerpt = tweet?.text?.replace(/\s+/g, ' ').trim();
+      if (!tweet || !excerpt) return child;
+      return {
+        ...child,
+        text: tweet.text,
+        author: tweet.author ?? child.author,
+        linkedSource: tweetItemToRoundupLinkedSource(tweet, child.url),
+        sourceResolution: { decision: 'use_linked_source', reason: 'roundup_destination' },
+      };
+    } catch (error) {
+      console.warn(`[collect] roundup 推文目的地抓取失败 ${child.url}: ${summarizeError(error)}`);
+      return child;
+    }
+  }
   if (!shouldFetchRoundupDestination(child.url)) return child;
   const linkedSource = await fetchPage(child.url);
   if (!linkedSource) return child;
@@ -1292,6 +1334,7 @@ async function expandSubstackRoundupItems(
   items: CollectedItem[],
   fetchPostHtml: (url: string) => Promise<string> = fetchSubstackText,
   fetchPage: (url: string) => Promise<LinkedSource | null> = fetchLinkedPage,
+  fetchRoundupTweet?: (url: string) => Promise<CollectedItem | null>,
 ): Promise<CollectedItem[]> {
   const expanded: CollectedItem[] = [];
 
@@ -1312,7 +1355,9 @@ async function expandSubstackRoundupItems(
     }
 
     expanded.push(
-      ...(await Promise.all(children.map((child) => attachRoundupDestinationSource(child, fetchPage)))),
+      ...(await Promise.all(
+        children.map((child) => attachRoundupDestinationSource(child, fetchPage, fetchRoundupTweet)),
+      )),
     );
   }
 
@@ -3323,6 +3368,7 @@ export async function collectSubstackItems({
     parents,
     fetchSubstackText,
     createLinkedPageFetcher(deps?.fetchLinkedPage ?? fetchLinkedPage),
+    deps?.fetchRoundupTweet ?? fetchRoundupTweetViaCli,
   );
   console.log(`[collect] Substack 完成，共采集 ${parents.length} 篇文章，展开 ${expanded.length - parents.length} 条 roundup 子项`);
   return sortNewestFirst(expanded);

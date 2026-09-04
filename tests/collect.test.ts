@@ -2637,6 +2637,19 @@ test("collectSubstackItems fetches a roundup child's destination article into li
         }
         throw new Error(`should not fetch ${url}`);
       },
+      fetchRoundupTweet: async (url: string) => {
+        assert.equal(url, 'https://x.com/finkd/status/1');
+        return {
+          id: '1',
+          source: 'twitter',
+          text: 'I am throwing out 85% of my own Fall 2025 notes.',
+          url,
+          originUrl: url,
+          author: { name: 'Mark', username: 'finkd' },
+          publishedAt: '2026-03-15T08:00:00.000Z',
+          media: [],
+        };
+      },
     },
   });
 
@@ -2658,8 +2671,84 @@ test("collectSubstackItems fetches a roundup child's destination article into li
     decision: 'use_linked_source',
     reason: 'roundup_destination',
   });
-  assert.equal(tweetChild?.linkedSource, undefined);
+  assert.equal(tweetChild?.kind, 'substack_roundup_entry');
+  assert.equal(tweetChild?.text, 'I am throwing out 85% of my own Fall 2025 notes.');
+  assert.equal(tweetChild?.author?.username, 'finkd');
+  assert.equal(tweetChild?.linkedSource?.excerpt, 'I am throwing out 85% of my own Fall 2025 notes.');
+  assert.deepEqual(tweetChild?.sourceResolution, {
+    decision: 'use_linked_source',
+    reason: 'roundup_destination',
+  });
   assert.equal(parent?.linkedSource, undefined);
+});
+
+test('collectSubstackItems keeps a roundup tweet child unchanged when tweet fetch fails', async () => {
+  const collectSubstackItems = (collectModule as Record<string, Function>).collectSubstackItems;
+  const fetched: string[] = [];
+
+  const items = await collectSubstackItems({
+    sinceTime: Date.parse('2026-03-15T07:30:00Z') / 1000,
+    deps: {
+      fetchPublicSubstackPublications: async () => [
+        {
+          name: "Ben's Bites",
+          handle: 'bensbites',
+          slug: 'bensbites',
+          url: 'https://www.bensbites.com',
+          roundupMode: 'bullet_links',
+        },
+      ],
+      fetchPublicationFeed: async () => ({
+        publication: {
+          name: "Ben's Bites",
+          handle: 'bensbites',
+          slug: 'bensbites',
+          url: 'https://www.bensbites.com',
+          roundupMode: 'bullet_links',
+        },
+        posts: [
+          {
+            id: 'https://www.bensbites.com/p/build-your-ideas',
+            title: 'build your ideas',
+            subtitle: null,
+            body: 'newsletter body',
+            htmlBody: [
+              '<h3>My feed</h3><ul>',
+              '<li><p><a href="https://factory.ai/news/gdal">Droid rebuilt GDAL from scratch</a> - 36% to 90% parity.</p></li>',
+              '<li><p><a href="https://x.com/finkd/status/1">Meta coding agent</a> is out of beta.</p></li>',
+              '</ul>',
+            ].join(''),
+            truncatedBody: 'newsletter excerpt',
+            publishedAt: '2026-03-15T08:00:00.000Z',
+            url: 'https://www.bensbites.com/p/build-your-ideas',
+          },
+        ],
+      }),
+      fetchLinkedPage: async (url: string) => {
+        fetched.push(url);
+        if (url === 'https://factory.ai/news/gdal') {
+          return {
+            url,
+            title: 'What it Takes for Coding Agents to Complete Large Software Tasks',
+            description: 'Held to a standard of completion they wrote themselves, agents rebuilt complex programs to near-parity.',
+            excerpt: 'We asked Droid to rebuild gdal from scratch.',
+            domain: 'factory.ai',
+            via: 'tweet',
+          };
+        }
+        throw new Error(`should not fetch ${url}`);
+      },
+      fetchRoundupTweet: async () => {
+        throw new Error('429');
+      },
+    },
+  });
+
+  const tweetChild = items.find((item: { url: string }) => item.url === 'https://x.com/finkd/status/1');
+  assert.deepEqual(fetched, ['https://factory.ai/news/gdal']);
+  assert.match(tweetChild?.text ?? '', /Meta coding agent/);
+  assert.equal(tweetChild?.linkedSource, undefined);
+  assert.equal(tweetChild?.sourceResolution, undefined);
 });
 
 test('collectSources merges source outputs newest-first and returns a collection snapshot', async () => {
