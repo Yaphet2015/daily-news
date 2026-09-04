@@ -143,6 +143,7 @@ not invent beyond it. If a card is truncated, only has a `t.co`, or lacks method
 fetch the original (paper HTML abstract, blog, docs) **before** writing. Never put collection-limitation notes in the
 published summary (no 「帖文被截断」, 「没有给出方法名」, 「不能从推荐语发明」). If the original is still
 unreachable, write only facts on the card, or drop the item. Fetched text must stay faithful to the source.
+Roundup 子项（`kind: substack_roundup_entry`，或 `sourceResolution.reason` 为 `roundup_destination` / 缺失）：`url` 才是主源，bullet / `title` 不是事实。若 bullet 把动作安到学校、公司、政府头上，必须先打开 destination（推文、博客、论文）再写。打不开就丢掉，或只写卡片上逐字出现的句子，禁止写成机构新闻。
 When `sourceResolution.reason` is `quote_wrapper` or `embedded_quote_wrapper`, `author` is the **quoted** account
 (from `quotedStatusUrl`). Tweet `text` is the wrapper's commentary; `linkedSource` is the article. Do **not** write
 that the quoting account wrote the article. Summarize the linked source; treat wrapper text as commentary only.
