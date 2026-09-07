@@ -231,22 +231,145 @@ test('probeHealth reaches 127.0.0.1 even when global fetch is forced through a d
   }
 });
 
-test('status lists canonical feedback artifacts and every source cursor', async () => {
-  const repo = await makeTempRepo();
-  const draft = { collectedAt: 1_783_476_198, enabledSources: ['twitter', 'aihot'], items: [{ id: '1' }] };
-  await writeFile(join(repo, 'output', '2026-07-08-ranking.json'), '{}');
-  await writeFile(join(repo, 'output', '2026-07-08-selection-decision.json'), '{}');
-  const status = await runStatus({ pipeline: {
-    draftModule: { readPendingDraft: async () => draft },
+const STATUS_DATE = '2026-07-08';
+const STATUS_DRAFT = { collectedAt: 1_783_476_198, enabledSources: ['twitter', 'aihot'], items: [{ id: '1' }] };
+const STATUS_IDENTITY = { runId: 'run-a', curationRevision: 'curation-a' };
+
+function statusPipeline(overrides = {}) {
+  return {
+    draftModule: { readPendingDraft: async () => STATUS_DRAFT },
     stateModule: { readState: async () => ({ sources: { twitter: { lastPublishedTime: 1 },
       substack: { lastPublishedTime: 2 }, aihot: { lastPublishedTime: 3 } } }) },
     sourceRegistryModule: { formatPublishedCursorStatus: (state) =>
       `Twitter=${state.sources.twitter.lastPublishedTime}, Substack=${state.sources.substack.lastPublishedTime}, AI HOT=${state.sources.aihot.lastPublishedTime}` },
-  }, repoRoot: repo, log: () => {} });
-  assert.match(status, /ranking\.json/);
-  assert.match(status, /selection-decision\.json/);
-  assert.match(status, /AI HOT=3/);
-  await rm(repo, { recursive: true, force: true });
+    selectionDecisionModule: {
+      decodeSelectionDecision: (value) => {
+        if (!value?.selection?.status) throw new Error('selection status is invalid');
+        return value;
+      },
+    },
+    curationArtifactModule: {
+      decodeCurationArtifact: (value) => value,
+    },
+    ...overrides,
+  };
+}
+
+function pendingDecision(overrides = {}) {
+  return {
+    ...STATUS_IDENTITY,
+    selection: { status: 'pending', selectedIds: [] },
+    ...overrides,
+  };
+}
+
+async function seedPreSelectArtifacts(repo, { decision, curation = STATUS_IDENTITY } = {}) {
+  const out = join(repo, 'output');
+  await writeFile(join(out, `${STATUS_DATE}-curate-input.json`), '{}');
+  await writeFile(join(out, `${STATUS_DATE}-curate-output.json`), '{}');
+  await writeFile(join(out, `${STATUS_DATE}-curation.json`), JSON.stringify(curation));
+  if (decision) {
+    await writeFile(join(out, `${STATUS_DATE}-selection-decision.json`), JSON.stringify(decision));
+  }
+}
+
+test('status lists canonical feedback artifacts and every source cursor', async () => {
+  const repo = await makeTempRepo();
+  try {
+    await writeFile(join(repo, 'output', `${STATUS_DATE}-ranking.json`), '{}');
+    const status = await runStatus({ pipeline: statusPipeline(), repoRoot: repo, log: () => {} });
+    assert.match(status, /ranking\.json/);
+    assert.match(status, /selection-decision\.json/);
+    assert.match(status, /AI HOT=3/);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('status next action is select-start when curation exists but no decision yet', async () => {
+  // Intent: a missing decision means the user has not started selection. Never recommend
+  // blocking `select` — that dies at the turn boundary and breaks confirm.
+  const repo = await makeTempRepo();
+  try {
+    await seedPreSelectArtifacts(repo);
+    const status = await runStatus({ pipeline: statusPipeline(), repoRoot: repo, log: () => {} });
+    assert.match(status, /Next action: run `select-start`/);
+    assert.match(status, /end the turn/i);
+    assert.doesNotMatch(status, /Next action: run `select`/);
+    assert.doesNotMatch(status, /Next action: run `publish`/);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('status next action stays on select-start while the decision is still pending', async () => {
+  // Intent: select-start writes a pending decision immediately. File existence is not
+  // confirmation. Publishing a pending decision fails later; status must not send the agent there.
+  const repo = await makeTempRepo();
+  try {
+    await seedPreSelectArtifacts(repo, { decision: pendingDecision() });
+    const status = await runStatus({ pipeline: statusPipeline(), repoRoot: repo, log: () => {} });
+    assert.match(status, /Next action: run `select-start`/);
+    assert.doesNotMatch(status, /Next action: run `publish`/);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('status next action is publish then select-stop only after the decision is confirmed', async () => {
+  const repo = await makeTempRepo();
+  try {
+    await seedPreSelectArtifacts(repo, {
+      decision: pendingDecision({ selection: { status: 'confirmed', selectedIds: ['1'] } }),
+    });
+    const status = await runStatus({ pipeline: statusPipeline(), repoRoot: repo, log: () => {} });
+    assert.match(status, /Next action: run `publish`/);
+    assert.match(status, /select-stop/);
+    assert.doesNotMatch(status, /Next action: run `select-start`/);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('status fails loud when a decision file is present but malformed', async () => {
+  const repo = await makeTempRepo();
+  try {
+    await seedPreSelectArtifacts(repo, { decision: {} });
+    await assert.rejects(
+      () => runStatus({ pipeline: statusPipeline(), repoRoot: repo, log: () => {} }),
+      /selection status is invalid/,
+    );
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('status fails loud when the decision identity does not match curation', async () => {
+  const repo = await makeTempRepo();
+  try {
+    await seedPreSelectArtifacts(repo, {
+      decision: pendingDecision({ runId: 'run-other' }),
+    });
+    await assert.rejects(
+      () => runStatus({ pipeline: statusPipeline(), repoRoot: repo, log: () => {} }),
+      /identity mismatch/,
+    );
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('status without a draft does not pretend collect is the post-publish recovery path', async () => {
+  // Intent: publish clears the draft, so status says collect. That is pre-publish recovery only.
+  // After publish the agent must still stop the select server and review feedback for that date.
+  const status = await runStatus({
+    pipeline: statusPipeline({ draftModule: { readPendingDraft: async () => null } }),
+    repoRoot: '/tmp',
+    log: () => {},
+  });
+  assert.match(status, /Next action: run `collect`/);
+  assert.match(status, /select-stop/);
+  assert.match(status, /feedback/i);
 });
 
 // ───────────────────────── publish wiring (fake pipeline) ─────────────────────────
@@ -273,7 +396,7 @@ test('runPublish consumes canonical artifacts without reranking', async () => {
     scoreFeedbackHistoryModule: { appendScoreFeedbackHistoryIdempotently: async () => 0 },
     publicationWorkflowModule: { finalizePublication: async (input) => {
       finalizeInput = input;
-      return { selectedItems: [{ id: '1' }], feedbackCount: 1, report: {} };
+      return { selectedItems: [{ id: '1' }], feedbackCount: 1, report: {}, review: { items: [{ id: '1' }] } };
     } },
   };
   try {
@@ -424,6 +547,25 @@ test('skill documents the post-publish content-tag feedback protocol', async () 
     'no_change', 'never modify author/domain rules', 'feedback-apply']) {
     assert.match(skill, new RegExp(phrase, 'i'));
   }
+});
+
+test('skill recovery contract: status is pre-publish only; pending is not publish', async () => {
+  // Intent: agents follow status blindly. After publish the draft is gone so status says
+  // collect, which would skip select-stop and feedback. Pending decision files must not
+  // look like confirmation.
+  const skill = await readFile(join(import.meta.dirname, '..', 'SKILL.md'), 'utf-8');
+  assert.match(skill, /pre-publish/i);
+  assert.match(skill, /do not collect yet/i);
+  assert.match(skill, /pending is not confirmed/i);
+  assert.match(skill, /select-start/);
+  assert.match(skill, /end the turn/i);
+});
+
+test('skill curate contract: follow curator.md, do not finalize early, slice the pool', async () => {
+  const skill = await readFile(join(import.meta.dirname, '..', 'SKILL.md'), 'utf-8');
+  assert.match(skill, /prompts\/curator\.md/);
+  assert.match(skill, /curate-output\.partial\.json/);
+  assert.match(skill, /high-signal pool is covered/i);
 });
 
 test('the skill scripts never invoke a third-party LLM or the monolithic generate entrypoint', async () => {

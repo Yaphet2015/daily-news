@@ -55,6 +55,9 @@ const VALID_COMMANDS = new Set([
 
 const VALID_CATEGORIES = ['Product', 'Tutorial', 'Opinions/Thoughts'];
 
+export const NEXT_SELECT_START = 'run `select-start`, then end the turn. Do not publish.';
+export const NEXT_PUBLISH = 'run `publish`, then `select-stop`.';
+
 function printUsage() {
   console.log(`Usage: daily-news-agent <command> [flags]
 
@@ -796,10 +799,29 @@ function formatRejectionCounts(diagnostics) {
   return parts.length > 0 ? parts.join(', ') : 'none';
 }
 
+async function resolveSelectStageNextAction({ pipeline, date, out, hasDecision }) {
+  if (!hasDecision) return NEXT_SELECT_START;
+  const decisionPath = join(out, `${date}-selection-decision.json`);
+  const curationPath = join(out, `${date}-curation.json`);
+  const decision = pipeline.selectionDecisionModule.decodeSelectionDecision(await readJson(decisionPath));
+  const curation = pipeline.curationArtifactModule.decodeCurationArtifact(await readJson(curationPath));
+  if (decision.runId !== curation.runId || decision.curationRevision !== curation.curationRevision) {
+    throw new Error('selection decision identity mismatch');
+  }
+  if (decision.selection.status === 'pending') return NEXT_SELECT_START;
+  if (decision.selection.status === 'confirmed') return NEXT_PUBLISH;
+  throw new Error(`selection status is invalid: ${decision.selection.status}`);
+}
+
 export async function runStatus({ pipeline, repoRoot, log }) {
   const draft = await pipeline.draftModule.readPendingDraft();
   if (!draft || !draft.items?.length) {
-    return ['daily-news status', 'No pending draft.', 'Next action: run `collect`.'].join('\n');
+    return [
+      'daily-news status',
+      'No pending draft.',
+      'Next action: run `collect`.',
+      'If you just published, do not collect yet: run `select-stop`, then review feedback for that date.',
+    ].join('\n');
   }
   const date = formatDateFromUnixSeconds(draft.collectedAt);
   const state = await pipeline.stateModule.readState();
@@ -823,10 +845,8 @@ export async function runStatus({ pipeline, repoRoot, log }) {
     next = 'agent curates (read curate-input.json → write curate-output.json), then run `curate-apply`';
   } else if (!files['curation.json']) {
     next = 'run `curate-apply`';
-  } else if (!files['selection-decision.json']) {
-    next = 'run `select`, open the URL, choose items, add optional score feedback, confirm';
   } else {
-    next = 'run `publish`';
+    next = await resolveSelectStageNextAction({ pipeline, date, out, hasDecision: files['selection-decision.json'] });
   }
 
   const lines = [
@@ -990,7 +1010,7 @@ async function runCurateApply({ pipeline, repoRoot, log }) {
     `Curated items: ${result.items.length}`,
     `Rejected: ${result.diagnostics.rejectedCount} (${formatRejectionCounts(result.diagnostics)})`,
     `Curation: ${curationPath}`,
-    'Next action: run `select`.',
+    `Next action: ${NEXT_SELECT_START}`,
   ].join('\n');
 }
 
@@ -1162,7 +1182,7 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
       'daily-news select: selection already exists',
       `Selection: ${decisionPath}`,
       'Re-run with --force to discard it and choose again.',
-      'Next action: run `publish`.',
+      `Next action: ${NEXT_PUBLISH}`,
     ].join('\n');
   }
 
@@ -1363,7 +1383,7 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
       'daily-news select-start: selection already exists',
       `Selection: ${decisionPath}`,
       'Re-run with --force to discard it and choose again.',
-      'Next action: run `publish` (then `select-stop` if a server is still running).',
+      `Next action: ${NEXT_PUBLISH}`,
     ].join('\n');
   }
 

@@ -31,7 +31,8 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 
 ## Output Requirements
 
-- Target output: **at least 40 items**, at most 50
+- Target output: **at least 40 items**, at most 50, when enough distinct high-signal items exist
+- On thin days, prefer fewer strong items over filler; do not pad to 40
 - On high-volume days, when enough distinct high-signal items are available, prefer returning closer to 50 rather than stopping near the minimum
 - Each item must include:
   - `id`: the exact item ID from the input
@@ -51,7 +52,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - The summary should usually progress through four layers when the material allows it: the factual trigger, the supporting detail or evidence, the deeper signal, and the unresolved question or boundary
 - If a source item appears to be showing off a product, posting screenshots, or sharing personal experience, but actually reveals product capability, model progress, distribution strategy, user demand, organizational movement, or an industry trend, make that deeper signal explicit
 - If a source item includes links, screenshots, charts, product UI, or demo clues, extract the concrete information those clues imply; do not just say "the author shared a link/image"
-- For Substack articles, treat the reader brief as a faithful compression of the full article body; use it aggressively, but do not invent details beyond it
+- For Substack articles, use the article body or linked-source text provided. If a reader brief exists, treat it as a faithful compression of that body; do not invent details beyond it. If this run has no reader brief, do not assume one
 - If media is represented only as metadata in the input, use it as a clue that supporting visuals exist, but do not invent details about what the image literally shows
 - For Twitter items that include both `Primary Source URL` and `Original Post URL`, treat the primary source as the canonical article/page to cite, and the original post as distribution context only
 - If a post contains both upside and limitation, include both; avoid one-sided hype or reflexive dismissal
