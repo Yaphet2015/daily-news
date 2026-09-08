@@ -2080,6 +2080,117 @@ test('collapseNumberedSelfThreads leaves invalid thread candidates as separate t
   ]);
 });
 
+test('collapseRapidSelfReplies merges a same-author follow-up posted within seconds so the product link is not stranded', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).collapseRapidSelfReplies, 'function');
+
+  const collapseRapidSelfReplies = (collectModule as Record<string, Function>).collapseRapidSelfReplies;
+  const collapsed = collapseRapidSelfReplies([
+    {
+      id: 'video-root',
+      source: 'twitter',
+      text: "New models in Copilot. Here's one fun",
+      publishedAt: '2026-09-06T18:00:00Z',
+      url: 'https://x.com/satyanadella/status/video-root',
+      originUrl: 'https://x.com/satyanadella/status/video-root',
+      author: { name: 'Satya Nadella', username: 'satyanadella' },
+      media: [{ type: 'video', url: 'https://video/opal.mp4' }],
+      likeCount: 10,
+    },
+    {
+      id: 'opal-followup',
+      source: 'twitter',
+      text: 'Learn more about Opal, the technology powering one of these Autopilot experiences',
+      publishedAt: '2026-09-06T18:00:01Z',
+      url: 'https://x.com/satyanadella/status/opal-followup',
+      originUrl: 'https://x.com/satyanadella/status/opal-followup',
+      author: { name: 'Satya Nadella', username: 'satyanadella' },
+      media: [],
+      outboundLinks: ['https://techcommunity.microsoft.com/blog/opal'],
+    },
+    {
+      id: 'other-author',
+      source: 'twitter',
+      text: 'unrelated',
+      publishedAt: '2026-09-06T18:00:01Z',
+      url: 'https://x.com/bob/status/other-author',
+      originUrl: 'https://x.com/bob/status/other-author',
+      author: { name: 'Bob', username: 'bob' },
+      media: [],
+    },
+  ]);
+
+  assert.deepEqual(collapsed.map((item: { id: string }) => item.id), ['video-root', 'other-author']);
+  assert.match(collapsed[0].text, /Opal/);
+  assert.deepEqual(collapsed[0].outboundLinks, ['https://techcommunity.microsoft.com/blog/opal']);
+  assert.deepEqual(collapsed[0].sourceResolution, { decision: 'keep_origin', reason: 'author_self_thread' });
+  assert.equal(collapsed[0].selfThread.partCount, 2);
+  assert.deepEqual(collapsed[0].selfThread.partIds, ['video-root', 'opal-followup']);
+  assert.deepEqual(collapsed[0].media, [{ type: 'video', url: 'https://video/opal.mp4' }]);
+  assert.equal(collapsed[0].url, 'https://x.com/satyanadella/status/video-root');
+});
+
+test('collapseRapidSelfReplies leaves same-author tweets more than 30s apart as separate posts', () => {
+  const collapseRapidSelfReplies = (collectModule as Record<string, Function>).collapseRapidSelfReplies;
+  const collapsed = collapseRapidSelfReplies([
+    {
+      id: 'suno',
+      source: 'twitter',
+      text: 'Computer Use on Suno',
+      publishedAt: '2026-09-07T01:00:00Z',
+      url: 'https://x.com/vista8/status/suno',
+      originUrl: 'https://x.com/vista8/status/suno',
+      author: { name: 'vista8', username: 'vista8' },
+      media: [],
+    },
+    {
+      id: 'ego',
+      source: 'twitter',
+      text: 'Install ego lite for Astra',
+      publishedAt: '2026-09-07T01:01:27Z',
+      url: 'https://x.com/vista8/status/ego',
+      originUrl: 'https://x.com/vista8/status/ego',
+      author: { name: 'vista8', username: 'vista8' },
+      media: [],
+    },
+  ]);
+
+  assert.deepEqual(collapsed.map((item: { id: string }) => item.id), ['suno', 'ego']);
+  assert.equal(collapsed[0].selfThread, undefined);
+});
+
+test('officialBlogFetchWarning records 403s only for OpenAI and Anthropic blogs', () => {
+  assert.equal(typeof (collectModule as Record<string, unknown>).officialBlogFetchWarning, 'function');
+  const officialBlogFetchWarning = (collectModule as Record<string, Function>).officialBlogFetchWarning;
+  const forbidden = new Error('curl: (56) The requested URL returned error: 403');
+
+  const openaiWarning = officialBlogFetchWarning(
+    'https://openai.com/index/research-acceleration-view-inside-openai/',
+    forbidden,
+  );
+  assert.equal(typeof openaiWarning, 'string');
+  assert.match(openaiWarning, /openai.com\/index\/research-acceleration-view-inside-openai/);
+  assert.match(openaiWarning, /403/);
+
+  const anthropicWarning = officialBlogFetchWarning(
+    'https://alignment.anthropic.com/2026/reward-seeker',
+    forbidden,
+  );
+  assert.equal(typeof anthropicWarning, 'string');
+  assert.match(anthropicWarning, /alignment.anthropic.com/);
+
+  assert.equal(
+    officialBlogFetchWarning(
+      'https://techcommunity.microsoft.com/blog/microsoft365copilotblog/introducing-project-opal/4470999',
+      forbidden,
+    ),
+    null,
+  );
+  assert.equal(
+    officialBlogFetchWarning('https://openai.com/index/an-alien-mind', new Error('curl: (28) timeout')),
+    null,
+  );
+});
+
 test('resolveTwitterPrimarySource keeps the origin tweet when linked-page fetch fails', async () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).resolveTwitterPrimarySource, 'function');
 

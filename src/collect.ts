@@ -12,6 +12,7 @@ import {
   type ConfirmedPreferenceRules,
 } from './preferences.js';
 import { collapseSameIdItems } from './collapse-same-id.js';
+import { OFFICIAL_SOURCE_DOMAINS } from './ranking-preferences.js';
 import { DEFAULT_ENABLED_SOURCES, normalizeSourceNames } from './source-registry.js';
 import type { SourceName } from './source-registry.js';
 import type {
@@ -42,6 +43,7 @@ const DEFAULT_SUBSTACK_MAX_POSTS_PER_PUBLICATION = 2;
 const DEFAULT_AIHOT_FEED_URL = 'https://aihot.virxact.com/feed.xml';
 const DEFAULT_AIHOT_MAX_ITEMS = 50;
 const SELF_THREAD_MAX_SPAN_SECONDS = 15 * 60;
+const RAPID_SELF_THREAD_MAX_GAP_SECONDS = 30;
 const DEFAULT_TWITTER_RECOMMENDATION_BATCH_SIZE = 50;
 const DEFAULT_TWITTER_RECOMMENDATION_BATCH_COUNT = 6;
 const DEFAULT_TWITTER_RECOMMENDATION_BATCH_MIN_DELAY_MS = 8000;
@@ -607,6 +609,7 @@ function buildCombinedThreadText(
 function buildCollapsedThreadItem(
   root: CollectedItem,
   parts: Array<{ item: CollectedItem; prefix: { part: number; total: number } }>,
+  reason: SourceResolution['reason'] = 'numbered_self_thread',
 ): CollectedItem {
   const selfThread: SelfThread = {
     partIds: parts.map(({ item }) => item.id),
@@ -614,6 +617,7 @@ function buildCollapsedThreadItem(
     combinedText: buildCombinedThreadText(parts),
     parts: parts.map(({ item }) => buildSelfThreadPart(item)),
   };
+  const outboundLinks = dedupeUrls(parts.flatMap(({ item }) => item.outboundLinks ?? []));
 
   return {
     ...root,
@@ -621,8 +625,9 @@ function buildCollapsedThreadItem(
     url: root.originUrl ?? root.url,
     originUrl: root.originUrl ?? root.url,
     media: parts.flatMap(({ item }) => item.media),
-    sourceResolution: { decision: 'keep_origin', reason: 'numbered_self_thread' },
+    sourceResolution: { decision: 'keep_origin', reason },
     selfThread,
+    ...(outboundLinks.length > 0 ? { outboundLinks } : {}),
   };
 }
 
@@ -685,6 +690,67 @@ export function collapseNumberedSelfThreads(items: CollectedItem[]): CollectedIt
     result.push(rootReplacements.get(item.id) ?? item);
   }
 
+  return result;
+}
+
+export function collapseRapidSelfReplies(items: CollectedItem[]): CollectedItem[] {
+  const itemsByAuthor = new Map<string, CollectedItem[]>();
+  for (const item of items) {
+    if (item.source !== 'twitter' || item.selfThread) continue;
+    const username = item.author.username?.trim().toLowerCase();
+    if (!username) continue;
+    const authorItems = itemsByAuthor.get(username) ?? [];
+    authorItems.push(item);
+    itemsByAuthor.set(username, authorItems);
+  }
+
+  const rootReplacements = new Map<string, CollectedItem>();
+  const omittedIds = new Set<string>();
+
+  for (const authorItems of itemsByAuthor.values()) {
+    const sorted = [...authorItems].sort(compareThreadOrder);
+    let index = 0;
+    while (index < sorted.length) {
+      const root = sorted[index];
+      if (!root || rootReplacements.has(root.id) || omittedIds.has(root.id)) {
+        index += 1;
+        continue;
+      }
+
+      const chain = [root];
+      const startedAt = toUnixSeconds(root.publishedAt);
+      let previous = root;
+
+      for (let probe = index + 1; probe < sorted.length; probe += 1) {
+        const candidate = sorted[probe];
+        if (!candidate || rootReplacements.has(candidate.id) || omittedIds.has(candidate.id)) break;
+        const candidateAt = toUnixSeconds(candidate.publishedAt);
+        if (candidateAt - toUnixSeconds(previous.publishedAt) > RAPID_SELF_THREAD_MAX_GAP_SECONDS) break;
+        if (candidateAt - startedAt > SELF_THREAD_MAX_SPAN_SECONDS) break;
+        chain.push(candidate);
+        previous = candidate;
+      }
+
+      if (chain.length < 2) {
+        index += 1;
+        continue;
+      }
+
+      const parts = chain.map((item, partIndex) => ({
+        item,
+        prefix: { part: partIndex + 1, total: chain.length },
+      }));
+      rootReplacements.set(root.id, buildCollapsedThreadItem(root, parts, 'author_self_thread'));
+      for (const item of chain.slice(1)) omittedIds.add(item.id);
+      index += chain.length;
+    }
+  }
+
+  const result: CollectedItem[] = [];
+  for (const item of items) {
+    if (omittedIds.has(item.id)) continue;
+    result.push(rootReplacements.get(item.id) ?? item);
+  }
   return result;
 }
 
@@ -2380,7 +2446,28 @@ async function fetchSubstackText(url: string): Promise<string> {
   }
 }
 
-async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
+function isOfficialBlogUrl(url: string): boolean {
+  try {
+    const host = normalizeDomain(new URL(url).hostname);
+    return OFFICIAL_SOURCE_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+
+function isForbiddenFetchError(error: unknown): boolean {
+  return /returned error:\s*403\b|\bHTTP 403\b|\b403 Forbidden\b/i.test(summarizeError(error));
+}
+
+export function officialBlogFetchWarning(url: string, error: unknown): string | null {
+  if (!isOfficialBlogUrl(url) || !isForbiddenFetchError(error)) return null;
+  return `官方博文抓取失败（403） ${url}：策展时请直接打开原文`;
+}
+
+async function fetchLinkedPage(
+  url: string,
+  onOfficialBlogFailure?: (warning: string) => void,
+): Promise<LinkedSource | null> {
   const normalizedUrl = canonicalizePrimarySourceUrl(url);
   if (!normalizedUrl) return null;
 
@@ -2410,6 +2497,11 @@ async function fetchLinkedPage(url: string): Promise<LinkedSource | null> {
     if (lastError) throw lastError;
   } catch (error) {
     console.warn(`[collect] 跳过外链抓取 ${normalizedUrl}: ${summarizeError(error)}`);
+    const warning = officialBlogFetchWarning(normalizedUrl, error);
+    if (warning) {
+      console.warn(`[collect] ${warning}`);
+      onOfficialBlogFailure?.(warning);
+    }
     return null;
   }
 
@@ -3177,7 +3269,7 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
     ...filterSinceTime(listItems, sinceTime).map((item) => ({ ...item, twitterFeed: 'list' as const })),
     ...recommendationResult.items,
   ]);
-  const collapsed = collapseNumberedSelfThreads(filtered);
+  const collapsed = collapseRapidSelfReplies(collapseNumberedSelfThreads(filtered));
   if (process.env.DAILY_NEWS_SKIP_TWITTER_PRIMARY_SOURCE_RESOLUTION?.trim() === '1') {
     console.log(`[collect] 跳过 Twitter primary source 解析，共采集 ${collapsed.length} 条内容`);
     return {
@@ -3186,7 +3278,10 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
     };
   }
   const sharedShortUrlResolver = createShortUrlResolver();
-  const sharedLinkedPageFetcher = createLinkedPageFetcher();
+  const officialBlogWarnings: string[] = [];
+  const sharedLinkedPageFetcher = createLinkedPageFetcher((url) =>
+    fetchLinkedPage(url, (warning) => officialBlogWarnings.push(warning)),
+  );
   const twitterEnrichmentBreaker = createTwitterEnrichmentCircuitBreaker();
   const resolved = await resolveTwitterPrimarySources(collapsed, {
     resolveTwitterPrimarySource: (item) =>
@@ -3198,11 +3293,14 @@ async function collectTwitterItems(sinceTime: number): Promise<SourceCollectionR
   });
   const quoteWarning = buildUnresolvedQuoteWarning(resolved);
   console.log(`[collect] Twitter 完成，共采集 ${resolved.length} 条内容`);
+  const warnings = [
+    ...(recommendationResult.warnings ?? []),
+    ...(quoteWarning ? [quoteWarning] : []),
+    ...officialBlogWarnings,
+  ];
   return {
     items: sortNewestFirst(resolved),
-    warnings: quoteWarning
-      ? [...(recommendationResult.warnings ?? []), quoteWarning]
-      : recommendationResult.warnings,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
