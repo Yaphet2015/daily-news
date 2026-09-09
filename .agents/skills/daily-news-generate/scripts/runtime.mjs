@@ -50,6 +50,7 @@ const VALID_COMMANDS = new Set([
   'select-start',
   'select-stop',
   'publish',
+  'blog-publish',
   'feedback-apply',
 ]);
 
@@ -83,7 +84,11 @@ Agent-driven pipeline (no third-party LLM — the agent curates):
                        user can steer. The server self-exits on confirm.
   select-stop          Stop the detached select server (from select-start's select.pid) and remove
                        the pidfile. Idempotent — run it after publish to clean up lingering servers.
-  publish              Format the selection, persist feedback review, advance state, clear the draft.
+  publish              Format the selection, persist feedback review, advance state, clear the draft,
+                       then sync the issue to blog.yaphet.me (Daily-News section; idempotent).
+  blog-publish [--date=YYYY-MM-DD] [--force]
+                       Sync a published issue to the blog without touching pipeline state.
+                       Omit --date to pick the latest Vault issue. Use to retry a failed sync.
   feedback-apply --date=YYYY-MM-DD
                        Validate output/<date>-feedback-adjustment.json and atomically update policy.
 
@@ -1484,6 +1489,64 @@ async function runSelectStop({ pipeline, repoRoot, log }) {
   return ['daily-news select-stop: ' + outcome, `removed ${pidPath}`].join('\n');
 }
 
+// Runs the blog sync script for a freshly published date. The blog sync is a separate
+// concern (astro-blog build + deploy) and must never break the pipeline result, so any
+// failure becomes a retry hint, not an error.
+const BLOG_PUBLISH_TIMEOUT_MS = 10 * 60 * 1000;
+
+async function runBlogPublishScript(repoRoot, log, args = []) {
+  const scriptPath = join(dirname(fileURLToPath(import.meta.url)), 'blog-publish.mjs');
+  if (!existsSync(scriptPath)) throw new Error(`missing ${scriptPath}`);
+  return await new Promise((resolve) => {
+    const child = spawn(process.execPath, [scriptPath, ...args], {
+      cwd: repoRoot,
+      env: { ...process.env, DAILY_NEWS_REPO: repoRoot },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), BLOG_PUBLISH_TIMEOUT_MS);
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { out += d.toString(); });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, out });
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      resolve({ code: 1, out: String(error) });
+    });
+  });
+}
+
+async function syncBlogAfterPublish(date, log) {
+  if (process.env.DAILY_NEWS_BLOG_AUTOSYNC === '0') {
+    return 'Blog sync skipped (DAILY_NEWS_BLOG_AUTOSYNC=0).';
+  }
+  try {
+    const repoRoot = resolveRepoRoot();
+    const { code, out } = await runBlogPublishScript(repoRoot, log, [`--date=${date}`]);
+    const url = `https://blog.yaphet.me/posts/daily-news/DailyNews${date.replaceAll('-', '')}/`;
+    if (code === 0 && out.includes('已上线')) {
+      return `Blog published: ${url}`;
+    }
+    if (out.includes('已有') && out.includes('跳过转换')) {
+      return `Blog already had ${date}; nothing to do.`;
+    }
+    log(out);
+    return `Blog sync did not confirm (see log above). Retry: daily-news-agent blog-publish --date=${date}`;
+  } catch (error) {
+    return `Blog sync failed to start: ${error instanceof Error ? error.message : String(error)}. Retry: daily-news-agent blog-publish --date=${date}`;
+  }
+}
+
+export async function runBlogPublish({ repoRoot, log, date, force }) {
+  const args = [];
+  if (date) args.push(`--date=${date}`);
+  if (force) args.push('--force');
+  const { code, out } = await runBlogPublishScript(repoRoot, log, args);
+  return ['daily-news blog-publish:', out.trim()].join('\n');
+}
+
 export async function runPublish({ pipeline, repoRoot, log }) {
   const draft = await readDraftOrFail(pipeline);
   const date = formatDateFromUnixSeconds(draft.collectedAt);
@@ -1516,6 +1579,10 @@ export async function runPublish({ pipeline, repoRoot, log }) {
 
   const remarkCount = result.review ? result.review.items.filter((it) => it.remark).length : 0;
 
+  // Blog sync: fire-and-report. A blog failure must never fail the pipeline publish
+  // (state already advanced, draft already cleared) — surface it as a follow-up action instead.
+  const blogNote = await syncBlogAfterPublish(date, log);
+
   return [
     'daily-news publish: complete',
     `Date: ${date}`,
@@ -1526,6 +1593,7 @@ export async function runPublish({ pipeline, repoRoot, log }) {
       ? `Feedback review: output/${date}-feedback-review.json（评分反馈 ${result.feedbackCount} 条，备注 ${remarkCount} 条）`
       : '本期无评分反馈和备注',
     'State advanced and pending draft cleared.',
+    blogNote,
   ].join('\n');
 }
 
@@ -1589,6 +1657,8 @@ export async function runAgent({
       return runSelectStop({ pipeline, repoRoot, log });
     case 'publish':
       return runPublish({ pipeline, repoRoot, log });
+    case 'blog-publish':
+      return runBlogPublish({ repoRoot, log, date, force });
     case 'feedback-apply':
       return runFeedbackApply({ pipeline, date });
     default:

@@ -15,7 +15,7 @@ Cwd is the repo root. Set `DAILY_NEWS_REPO` only when outside the repo. Flags: `
 `preflight` already runs inside every command. `diagnose` only when collect/env fails.
 Do **not** use this skill to change ranking code or to reread an old report.
 
-Agent-facing commands: `status`, `collect [--resume|--discard]`, `curate-input`, `curate-apply`, `select-start [--force]`, `select-stop`, `publish`, `feedback-apply --date=YYYY-MM-DD`.
+Agent-facing commands: `status`, `collect [--resume|--discard]`, `curate-input`, `curate-apply`, `select-start [--force]`, `select-stop`, `publish`, `blog-publish [--date=YYYY-MM-DD] [--force]`, `feedback-apply --date=YYYY-MM-DD`.
 Never run blocking `select`. `select-start` still spawns it internally.
 
 ## Recovery
@@ -95,6 +95,8 @@ Do not operate the HTML. `selection-decision.json` is SSOT. Legacy `selection.js
 ### 6. publish
 
 After `status` says publish: `publish`, then `select-stop`.
+
+`publish` now also syncs the issue to **blog.yaphet.me** (Daily-News section) automatically: Vault note → astro-blog post → build → git push → EdgeOne deploy → live check. The sync is idempotent and fire-and-report: if it fails, publish still succeeds and the output shows a retry hint — run `blog-publish --date=<date>` to retry. Set `DAILY_NEWS_BLOG_AUTOSYNC=0` to skip the blog sync entirely.
 
 ## Post-publish feedback
 
