@@ -92,6 +92,10 @@ Run `curate-apply`. Zero curated items or many rejections → usually a copied i
 Run `select-start`, tell the user to pick 6–10 items (optional 评分过高 / 评分过低, optional 备注), then **end the turn**.
 Do not operate the HTML. `selection-decision.json` is SSOT. Legacy `selection.json` is not publish input.
 
+### 5b. Write the one-line description (before publish)
+
+After selection is confirmed (status says publish), write `output/<date>-desc.txt`: **one line of Chinese, ≤80 chars**, summarizing this issue's highlights (names + numbers beat adjectives, e.g. `Gemini 3.5 发布、OpenAI 开源 o4-mini，本期 9 条`). One `writeFile`, no extra deps. If missing or multi-line, `blog-publish` falls back to the generic tagline and the publish output will flag it — write it before every publish; on a flagged retry, write the file then re-run `blog-publish --date=<date>`.
+
 ### 6. publish
 
 After `status` says publish: `publish`, then `select-stop`.

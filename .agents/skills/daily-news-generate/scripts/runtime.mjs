@@ -1527,7 +1527,10 @@ async function syncBlogAfterPublish(date, log) {
     const { code, out } = await runBlogPublishScript(repoRoot, log, [`--date=${date}`]);
     const url = `https://blog.yaphet.me/posts/daily-news/DailyNews${date.replaceAll('-', '')}/`;
     if (code === 0 && out.includes('Blog published:')) {
-      return `Blog published: ${url}`;
+      const descNote = out.includes('副标题用默认句')
+        ? '\n注意: 本期副标题用了默认句（缺 output/' + date + '-desc.txt）。下次 publish 前先写一句话摘要。'
+        : '';
+      return `Blog published: ${url}${descNote}`;
     }
     if (code === 0 && out.includes('Blog already had')) {
       return `Blog already had ${date}; nothing to do.`;

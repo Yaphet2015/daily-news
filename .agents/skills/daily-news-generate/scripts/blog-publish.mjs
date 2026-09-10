@@ -17,7 +17,7 @@ const BLOG_REPO = process.env.DAILY_NEWS_BLOG_REPO || join(homedir(), 'workspace
 const VAULT = process.env.OBSIDIAN_VAULT_PATH?.trim() ||
   join(homedir(), 'Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault');
 const SITE = 'https://blog.yaphet.me';
-const DN_DESC = 'AI 日刊：每天从 Product / Tutorial / Opinions 三栏精选值得看的信息';
+const DN_DESC_FALLBACK = 'AI 日刊：每天从 Product / Tutorial / Opinions 三栏精选值得看的信息';
 const DST_REL = 'src/data/blog/Daily-News';
 const WAIT_DEADLINE_MS = 6.5 * 60 * 1000; // CI 等待上限，须小于 runtime 的 10min 超时
 
@@ -68,6 +68,22 @@ function findSourceNote(date) {
   return candidates.find((p) => existsSync(p));
 }
 
+// 本期一句话副标题：agent 在 publish 前写 output/<date>-desc.txt（一行中文，≤80 字）。
+// 缺文件或多行时回退默认句，并提示 agent 补写——回退不阻塞发布。
+function resolveDesc(date) {
+  const descPath = join(resolveRepo(), 'output', `${date}-desc.txt`);
+  if (!existsSync(descPath)) {
+    log(`⚠️ 未找到 ${descPath}，副标题用默认句。publish 前让 agent 写一句话摘要可换成本期专属描述。`);
+    return DN_DESC_FALLBACK;
+  }
+  const desc = readFileSync(descPath, 'utf-8').trim();
+  if (!desc || desc.includes('\n')) {
+    log(`⚠️ ${descPath} 内容为空或多行，副标题用默认句`);
+    return DN_DESC_FALLBACK;
+  }
+  return desc;
+}
+
 function convert(src, date, hasCover) {
   const txt = readFileSync(src, 'utf-8');
   if (!txt.includes('## Product')) throw new Error('源笔记缺少 ## Product 段（非正式日报）');
@@ -76,6 +92,7 @@ function convert(src, date, hasCover) {
   const body = body0.replace(/^#\s+.*\n+/, '').trimEnd();
   const updated = fm?.[1].match(/^updated:\s*(\S+)/m)?.[1];
   const compact = date.replaceAll('-', '');
+  const desc = resolveDesc(date);
   const lines = ['---', 'author: Yaphet', `pubDatetime: ${date}T00:00:00.000Z`];
   if (updated) {
     const z = new Date(new Date(updated).getTime() - 8 * 3600e3).toISOString().replace(/\.\d+Z$/, '.000Z');
@@ -83,7 +100,7 @@ function convert(src, date, hasCover) {
   }
   lines.push(`title: AI 日刊 · ${date}`, `slug: DailyNews${compact}`, 'draft: false',
     'tags:', '  - daily-news', ...(hasCover ? ['ogImage: ../../../assets/images/dailynews-cover.png'] : []),
-    'description:', `  ${DN_DESC}`, '', '---', '');
+    'description:', `  ${desc}`, '', '---', '');
   return lines.join('\n') + body + '\n';
 }
 
