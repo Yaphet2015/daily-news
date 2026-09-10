@@ -96,7 +96,7 @@ Do not operate the HTML. `selection-decision.json` is SSOT. Legacy `selection.js
 
 After `status` says publish: `publish`, then `select-stop`.
 
-`publish` now also syncs the issue to **blog.yaphet.me** (Daily-News section) automatically: Vault note → astro-blog post → build → git push → EdgeOne deploy → live check. The sync is idempotent and fire-and-report: if it fails, publish still succeeds and the output shows a retry hint — run `blog-publish --date=<date>` to retry. Set `DAILY_NEWS_BLOG_AUTOSYNC=0` to skip the blog sync entirely.
+`publish` now also syncs the issue to **blog.yaphet.me** (Daily-News section) automatically: repo `output/` Markdown (Vault fallback) → astro-blog branch → `gh` PR → squash merge → CI build & EdgeOne deploy → live check. The sync is idempotent and fire-and-report: if it fails, publish still succeeds and the output shows a retry hint — run `blog-publish --date=<date>` to retry. Set `DAILY_NEWS_BLOG_AUTOSYNC=0` to skip the blog sync entirely. Requires `gh` logged in on the machine (`gh auth login && gh auth setup-git`); no local astro-blog build, no EdgeOne token needed.
 
 ## Post-publish feedback
 
