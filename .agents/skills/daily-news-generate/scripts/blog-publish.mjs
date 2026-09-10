@@ -68,7 +68,7 @@ function findSourceNote(date) {
   return candidates.find((p) => existsSync(p));
 }
 
-// 本期一句话副标题：agent 在 publish 前写 output/<date>-desc.txt（一行中文，≤80 字）。
+// 本期副标题：agent 在 publish 前写 output/<date>-desc.txt（一行中文，~240 字，硬范围 200–280，标点计入、空白不计）。
 // 缺文件或多行时回退默认句，并提示 agent 补写——回退不阻塞发布。
 function resolveDesc(date) {
   const descPath = join(resolveRepo(), 'output', `${date}-desc.txt`);
