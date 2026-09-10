@@ -94,7 +94,7 @@ Do not operate the HTML. `selection-decision.json` is SSOT. Legacy `selection.js
 
 ### 5b. Write the one-line description (before publish)
 
-After selection is confirmed (status says publish), write `output/<date>-desc.txt`: **one line of Chinese, ≤80 chars**, summarizing this issue's highlights (names + numbers beat adjectives, e.g. `Gemini 3.5 发布、OpenAI 开源 o4-mini，本期 9 条`). One `writeFile`, no extra deps. If missing or multi-line, `blog-publish` falls back to the generic tagline and the publish output will flag it — write it before every publish; on a flagged retry, write the file then re-run `blog-publish --date=<date>`.
+After selection is confirmed (status says publish), write `output/<date>-desc.txt`: **one line of Chinese, ≤80 chars**, summarizing this issue's highlights. Tone: ASD-STE100 Simplified Technical English style, but in Chinese, written for a reader with ADHD — short sentence, concrete names and numbers, no stacked adjectives, no metaphors (e.g. `Gemini 3.5 发布、OpenAI 开源 o4-mini，本期 9 条`). One `writeFile`, no extra deps. If missing or multi-line, `blog-publish` falls back to the generic tagline and the publish output will flag it — write it before every publish; on a flagged retry, write the file then re-run `blog-publish --date=<date>`.
 
 ### 6. publish
 
