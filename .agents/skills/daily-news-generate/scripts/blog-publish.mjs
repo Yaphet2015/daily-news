@@ -99,7 +99,7 @@ function convert(src, date, hasCover) {
     if (!z.startsWith('NaN') && !z.includes('Invalid')) lines.push(`modDatetime: ${z}`);
   }
   lines.push(`title: AI 日刊 · ${date}`, `slug: DailyNews${compact}`, 'draft: false',
-    'tags:', '  - daily-news', ...(hasCover ? ['ogImage: ../../../assets/images/dailynews-cover.png'] : []),
+    'tags:', '  - daily-news', ...(hasCover ? ['ogImage: ../../../assets/images/dailynews-cover.jpg'] : []),
     'description:', `  ${desc}`, '', '---', '');
   return lines.join('\n') + body + '\n';
 }
@@ -196,7 +196,7 @@ async function main() {
   const branch = `daily-news/${date}`;
   const dstRel = `${DST_REL}/${date}-daily-news.md`;
   const dst = join(BLOG_REPO, dstRel);
-  const hasCover = existsSync(join(BLOG_REPO, 'src/assets/images/dailynews-cover.png'));
+  const hasCover = existsSync(join(BLOG_REPO, 'src/assets/images/dailynews-cover.jpg'));
   const content = convert(src, date, hasCover);
 
   const prevBranch = (await run(['git', 'branch', '--show-current'], BLOG_REPO)).out.trim();
