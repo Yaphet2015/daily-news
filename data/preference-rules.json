@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-09-14T06:26:02.048Z",
+  "authorRules": {},
+  "domainRules": {},
+  "positiveTopicHints": [],
+  "negativeTopicHints": [],
+  "policyRevision": 5,
+  "tagWeightOverrides": {
+    "custom:amp-incremental-product": -2,
+    "custom:meta-muse-agent": -2,
+    "custom:imessage-chatgpt-agent": -2,
+    "custom:concept-explainer": 2
+  },
+  "rankingSignalWeightOverrides": {},
+  "appliedAdjustmentIds": [
+    "adj-2026-08-28-no-change-heterogeneous-too-high",
+    "adj-2026-08-30-no-change-conflicting-directions",
+    "adj-2026-08-31-amp-incremental-product",
+    "adj-2026-09-02-no-change-roundup-teaser-and-remarks",
+    "adj-2026-09-04-no-change-milestone-and-roundup",
+    "adj-2026-09-07-meta-muse-agent",
+    "adj-2026-09-08-imessage-chatgpt-agent",
+    "adj-2026-09-10-no-change-armin-astra-too-low",
+    "adj-2026-09-14-concept-explainer"
+  ],
+  "customTags": [
+    {
+      "id": "custom:amp-incremental-product",
+      "label": "Amp incremental product updates",
+      "keywords": [
+        "amp now supports",
+        "ampcode",
+        "orbs that"
+      ]
+    },
+    {
+      "id": "custom:meta-muse-agent",
+      "label": "Meta Muse agent product news",
+      "keywords": [
+        "muse agent"
+      ]
+    },
+    {
+      "id": "custom:imessage-chatgpt-agent",
+      "label": "iMessage ChatGPT agent wrappers",
+      "keywords": [
+        "imessage agent",
+        "imessage assistant"
+      ]
+    },
+    {
+      "id": "custom:concept-explainer",
+      "label": "深入浅出的知识点讲解",
+      "keywords": [
+        "讲得非常清楚",
+        "深入浅出",
+        "讲清",
+        "clearly explained"
+      ]
+    }
+  ],
+  "adjustmentEvidence": [
+    {
+      "adjustmentId": "adj-2026-08-28-no-change-heterogeneous-too-high",
+      "feedbackEventIds": [
+        "2ffd27fa355859f2a65be264d074b8a6cfb096936fb7bfbe06bc854248c94dad",
+        "fb8ee38193dff36839b0e2f4f910a2837a073d82e5cce4b55569f722c7e3500f",
+        "2696bb4b499b0c61c68c7ddcd0085811bdce5b0c96f710a1914b518d73ba4bdb",
+        "25da0ccbc4026a62450a4b50b3744a91fa3d808e57be2aab680bce4ab4e93ffb",
+        "70e37822b587da7d53c3442fa7ab85f733bcf24cb6992a895bec90e6574dc940",
+        "9f952d690af13962c6eb09ad70fb146ae1cbedf9805c6a7fc5b8c642db7368b9",
+        "2cf3b1bfcc9719eb367f3b740fedeb6c8401900726c9f55bab8ba7cd63ef84fe",
+        "2ee5686cfbcc3ea46a6f266786ddda2dc90f86a3d8fd6a36ffe1282c458390a1",
+        "3a61167cfd9d080e849832da8f889a36cec66566afd5e5ca11087e9b6e4f2c83",
+        "d0b31ef8a56ec91d1ea60d9c21a19d2e6252118d6eeca6b5eb424ce9ead98c85"
+      ],
+      "attribution": "10 条均为 too_high，但不是同一类内容：Cursor/Claude Code changelog、GStack 配置、Execution Checkpoint、Rippling Slackbot、Ben's Bites 短摘要、网络防御联署、本地 AI 访谈、DeepMind 概率访谈。它们没有共享一个足够小的 Tag。出现最多的 topic:agents 和 quality:evidence-rich 过宽，且用户已选中的 MHS、PhoneLLM、vgpu、Hermes、Taste 等同样带这些 Tag。当前 Tag 权重均为 0，分数实际来自 ranking:substance/evidence/novelty；Ranking Signal 需要 3 次同方向、跨 2 期才能改。因此本期不改权重。",
+      "outcome": "no_change",
+      "recordedAt": "2026-08-28T07:06:50.165Z"
+    },
+    {
+      "adjustmentId": "adj-2026-08-30-no-change-conflicting-directions",
+      "feedbackEventIds": [
+        "56a45307996516749a0746f0e5ee601a7e9a624da1766cf45f098013a3dfc43e",
+        "e476565f6c6ec3352d72fde489c3edd140a3a51ecb302b69e66f04452bc9a9a3",
+        "534a566dc70c4d93cfecca621f42e69fca12f23ba2b995f39d81fded4f00f047",
+        "fc38bb45a9fcbbb7041a0bef87b2fd5c258afe473c7ed41614e923aa599bfb92",
+        "cbaaf2b99ba83086a98c20f5825f10c9274fb4f53fc8d5cec3176cd58adfebbf"
+      ],
+      "attribution": "本期 3 条 too_high（Unsloth 自测 GGUF、Box/Hermes 厂商教程、Gemini Co-Scientist 科研转述）和 2 条 too_low（harness 杠杆随笔、Uber Agent 控成本）方向相反，却共享 topic:agents、quality:evidence-rich、format:tutorial。现有 Tag 权重全是 0，分数实际来自 ranking:substance/evidence/novelty；不能按单次或冲突样本改 Ranking Signal。too_high 上仅有的 format:launch / topic:model-evaluation / format:research 过宽或是弱匹配（Nous Research、preserving→serving）。两条 too_low 也不是同一类内容。因此不改权重。",
+      "outcome": "no_change",
+      "recordedAt": "2026-08-30T12:28:36.519Z"
+    },
+    {
+      "adjustmentId": "adj-2026-08-31-amp-incremental-product",
+      "feedbackEventIds": [
+        "11759424631ce36da705ca1d4440e1527c444666fbe27e60eb5476c4421d9534"
+      ],
+      "attribution": "Amp 多 GitHub 账号（too_high + 备注「AMP 产品相关的适当降权，除非重大更新」）是本期唯一可执行的窄范围评分信号。现有匹配 Tag（topic:agents、format:launch、quality:evidence-rich）过宽，且不可改作者/域名。因此新增 custom:amp-incremental-product（关键词 amp now supports / ampcode / orbs that），权重 0→-2。未纳入：Gemini Notebook 预告只有 too_high、无备注，format:launch/research 过宽；NPO 论文备注指向另一类「过细分 prompt optimization」，单次事件只能动一个 Tag，留待该类再现。Stanford 长推理论文备注是采集/策展问题，不是偏好信号。三条 too_high 同属一期，不够改 Ranking Signal。",
+      "outcome": "applied",
+      "recordedAt": "2026-09-01T02:51:07.069Z"
+    },
+    {
+      "adjustmentId": "adj-2026-09-02-no-change-roundup-teaser-and-remarks",
+      "feedbackEventIds": [
+        "1b27c3ca3bd953f07658f64aaaf9f58f4c5dd37202ad32c977dec7f7e18b733f"
+      ],
+      "attribution": "三条备注不是同一类信号，且没有可执行的窄 Tag。1) Factory/ProgramBench（too_low +「实操博客不该挂低质量/弱证据」）：唯一匹配 Tag 是 quality:vague（substance<12），过宽，抬它会抬所有短摘要。分数来自 Ben's Bites roundup 子项只保留 bullet（substance=10、evidence=0、无 linkedSource），不是目标博客本身。单次事件不能改 ranking:substance/evidence。自定义 Tag 若只用 gdal/programbench 只会贴这一条 URL，修不了「实操博客」类。这是采集/打分路径缺陷，不是偏好权重。2) Gemini AVU 备注是策展措辞：用「相对固定帧率」对比新旧方案，被读成新产品仍是 1 FPS；linkedSource 摘要本身正确。不改 Tag。3) Amp 智能 diff 备注确认现有 custom:amp-incremental-product（增量产品动态降权，重大/新颖功能仍可收）；本条无评分方向，且未匹配该 Tag。不改作者/域名，也不改 Ranking Signal。",
+      "outcome": "no_change",
+      "recordedAt": "2026-09-02T06:26:10.009Z"
+    },
+    {
+      "adjustmentId": "adj-2026-09-04-no-change-milestone-and-roundup",
+      "feedbackEventIds": [
+        "71f75f523e110e48489d23e62b8b95e71872f08f1ffee3ae8bb424e03bae781f",
+        "64a76008caa8557bfcd1d6659d063b7c0f43c152e16d255eb0823be69e1ca2e6"
+      ],
+      "attribution": "两条 too_low 不是同一类信号，都没有可执行的窄 Tag。1) OpenAI GPT-6 Astra 官宣（too_low +「行业里程碑应顶格」）：唯一匹配 Tag 是 quality:evidence-rich，过宽。短官宣帖 substance=12、未打上 format:launch。单次事件不能改 ranking:source-credibility / novelty。从 textPreview 只能抽出 gpt-6/astra，会变成单模型 Tag，修不了「此类」里程碑。已有 openai 官号作者规则，评分按钮不改作者/域名。2) 斯坦福软件课 roundup（too_low +「不是斯坦福砍了，是作者自己的课；总结有问题，内容还可以」）：匹配 Tag 是 topic:agents（过宽）和 quality:vague（不该抬）。分数低是因为 Ben's Bites 子项只剩一行 bullet（substance=8、evidence=0）。too_low 不能归因到正确窄 Tag。备注的事实纠正是策展总结错误，不是偏好：源文案写 Stanford scrapped，我未打开原推就写成「斯坦福砍课」。不改 Tag。同跑还有两条无方向备注（Lenny 设计长文、Grok Bot 设计长文，都是「这篇很好」），history 不收录无方向事件，且二者已 61 分、Tag 分别为 format:tutorial 与 format:launch，不能合成一次合法调整。不改 Ranking Signal，不改作者/域名。",
+      "outcome": "no_change",
+      "recordedAt": "2026-09-04T08:02:13.009Z"
+    },
+    {
+      "adjustmentId": "adj-2026-09-07-meta-muse-agent",
+      "feedbackEventIds": [
+        "8d529e0be8ef689d628734292c11cb35dd2d0bdd6626ba1d28dda6a2dff54694"
+      ],
+      "attribution": "Meta Muse 封闭 alpha（too_high + 备注「62 有点过高了，主要是 meta 产品的热度感觉不那么热」）是本期唯一可执行的窄范围评分信号。现有匹配 Tag（topic:agents、format:launch、quality:evidence-rich）过宽，且不可改作者/域名。单次事件不能改 Ranking Signal。因此新增 custom:meta-muse-agent（关键词 muse agent），权重 0→-2，只打 Muse 产品动态，不波及其它 Agent/发布。未纳入两条无方向备注，它们是采集/溯源缺陷不是偏好：1) Nadella 视频帖（2096633944099942713）简介写成 Copilot/Autopilots，原线程第二条才点名 Opal 并给出 Microsoft 博文，但 429 没挂上 reply、博文 403、Opal 帖未进候选池；2) Noam Brown 引用 Kelly Liu，最终源是 openai.com/index/research-acceleration-view-inside-openai/，quote 解析只走一跳且嵌入正文无外链。不改作者/域名。",
+      "outcome": "applied",
+      "recordedAt": "2026-09-07T07:21:51.581Z"
+    },
+    {
+      "adjustmentId": "adj-2026-09-08-imessage-chatgpt-agent",
+      "feedbackEventIds": [
+        "465bde381e20e340943fde89172d053ae8cf194574c771fbfceeb0066bd7e888"
+      ],
+      "attribution": "Companion iMessage Agent（too_high + 备注「openclaw 变形、额外付费、已常见、无创新」）是本期唯一评分事件。现有匹配 Tag（topic:agents、quality:evidence-rich）过宽；novelty 虽对口，但单次事件不能改 Ranking Signal，也不可改作者/域名。因此新增 custom:imessage-chatgpt-agent（关键词 imessage agent / imessage assistant），权重 0→-2，只打「自带 ChatGPT、挂在 iMessage 上的消费级 Agent 套壳」，不波及其它 Agent 产品。",
+      "outcome": "applied",
+      "recordedAt": "2026-09-08T09:45:59.850Z"
+    },
+    {
+      "adjustmentId": "adj-2026-09-10-no-change-armin-astra-too-low",
+      "feedbackEventIds": [
+        "37b9bbfb98e3ceb4a078488712a5beba216c29c6ceaa541da78ab1e3c4ab2aa5"
+      ],
+      "attribution": "Armin 的 Astra 工程随笔（too_low，无备注）是本期唯一评分事件。匹配 Tag 不能用：format:tutorial 来自正文 how to 的误伤（I don't know how to work with it），抬它会抬真教程；quality:evidence-rich 过宽。当前 Tag 权重均为 0，67 分来自 ranking:substance/evidence/novelty，单次事件不能改 Ranking Signal，也不能改作者/域名。从 textPreview 只能抽出 astra/code samples/traces，做成 custom Tag 只会贴这一条 URL，修不了「此类」一线工程评论。因此不改权重。",
+      "outcome": "no_change",
+      "recordedAt": "2026-09-10T03:39:07.736Z"
+    },
+    {
+      "adjustmentId": "adj-2026-09-14-concept-explainer",
+      "feedbackEventIds": [
+        "a3074a06f9930425be4db3c2778ded521fc08b71a603819db15970ff933af124"
+      ],
+      "attribution": "马博 KV Cache 长文（too_low + 备注「喜欢把知识点拆开的深度讲解」）是本期唯一评分事件。先前误绑 custom:kv-cache-prefill-explainer，已撤回：备注针对的是深入浅出的讲解体裁，不是 KV/prefill 主题。现有匹配 Tag 只有 topic:ai-infra，过宽。format:tutorial 未命中（中文讲解没有 tutorial/guide/how to）。单次事件不能改 Ranking Signal，也不能改作者/域名。因此新增 custom:concept-explainer（关键词：讲得非常清楚 / 深入浅出 / 讲清 / clearly explained），权重 0→+2，只抬把概念拆开讲的讲解文。",
+      "outcome": "applied",
+      "recordedAt": "2026-09-14T06:26:02.048Z"
+    }
+  ]
+}

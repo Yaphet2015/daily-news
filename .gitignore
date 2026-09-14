@@ -9,11 +9,10 @@ node_modules/
 # Output files
 output/
 
-# Local preference learning state
+# Local preference learning state (not the confirmed scoring overlay)
 data/preference-history.jsonl
 data/preference-profile.json
 data/preference-suggestions.json
-data/preference-rules.json
 data/score-feedback-history.jsonl
 
 # IDE

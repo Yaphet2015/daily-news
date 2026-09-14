@@ -403,7 +403,7 @@ SSOT 不表示把不同语义放进同一张表。有效 policy 按明确顺序�
 
 ### 11.2 Confirmed overlay
 
-`data/preference-rules.json` 是本机确认 overlay 的唯一持久化文件。它不复制完整 baseline。
+`data/preference-rules.json` 是仓库共享的确认 overlay，也是唯一政策 SSOT。它不复制完整 baseline。换机器跑同一套评分时必须使用这份文件。
 
 它可以保存：
 

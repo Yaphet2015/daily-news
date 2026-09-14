@@ -209,7 +209,7 @@ output/YYYY-MM-DD-substack.html
 | `data/preference-history.jsonl` | 本机私有的人工选择历史，记录每次 select 的全候选结构化特征与选中/未选中结果 |
 | `data/preference-profile.json` | 本机私有的偏好画像，由历史选择汇总生成 |
 | `data/preference-suggestions.json` | 本机私有的待确认偏好建议 |
-| `data/preference-rules.json` | 本机私有的 confirmed Tag / Ranking Signal overlay；唯一 policy SSOT |
+| `data/preference-rules.json` | 仓库共享的 confirmed Tag / Ranking Signal overlay；唯一 policy SSOT。换机器必须带上这份文件，否则只剩 baseline 权重 |
 | `data/score-feedback-history.jsonl` | 按 feedback event ID 幂等记录的长期评分反馈历史 |
 
 ---
