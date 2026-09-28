@@ -193,6 +193,10 @@ test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every 
   assert.match(html, /daily-news-select:/);
   assert.match(html, /评分过高/);
   assert.match(html, /评分过低/);
+  // A failed thumbnail must be retried. antd Image keeps the error, while the large preview is a new request.
+  assert.match(html, /function RetryImage/);
+  assert.match(html, /retry=/);
+  assert.match(html, /preview=\{\{ src \}\}/);
   assert.match(html, /serverOrigin\+'\/feedback'/);
   assert.match(html, /"runId":"run-a"/);
   assert.match(html, /"curationRevision":"curation-a"/);

@@ -489,6 +489,27 @@ function RootApp() {
   );
 }
 
+function RetryImage({ src, alt }) {
+  // A failed thumbnail stays blank: antd Image records the error and does not retry.
+  // The large preview is a new request, so it can succeed after the thumbnail failed.
+  // Remount on each attempt so that recorded error does not hide a later success.
+  const [attempt, setAttempt] = useState(0);
+  const displaySrc = attempt === 0 ? src : src + (src.indexOf('?') === -1 ? '?' : '&') + 'retry=' + attempt;
+  return (
+    <Image
+      key={displaySrc}
+      width={96}
+      height={96}
+      src={displaySrc}
+      preview={{ src }}
+      alt={alt}
+      style={{ objectFit: 'cover', borderRadius: 6 }}
+      referrerPolicy="no-referrer"
+      onError={() => { if (attempt < 2) setAttempt(attempt + 1); }}
+    />
+  );
+}
+
 function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle, onFeedback, remark, onRemark }) {
   const photos = (Array.isArray(item.media) ? item.media : []).filter((m) => m.type === 'photo').slice(0, 4);
   // Free-text remark: local draft while typing; saved to the decision file on blur (empty text deletes).
@@ -539,15 +560,7 @@ function ItemCard({ item, checked, disabled, activeDirection, rowState, onToggle
             <Image.PreviewGroup>
               <Space size={8} wrap style={{ marginBottom: 4 }}>
                 {photos.map((m) => (
-                  <Image
-                    key={m.url}
-                    width={96}
-                    height={96}
-                    src={m.url}
-                    alt={item.title}
-                    style={{ objectFit: 'cover', borderRadius: 6 }}
-                    referrerPolicy="no-referrer"
-                  />
+                  <RetryImage key={m.url} src={m.url} alt={item.title} />
                 ))}
               </Space>
             </Image.PreviewGroup>
