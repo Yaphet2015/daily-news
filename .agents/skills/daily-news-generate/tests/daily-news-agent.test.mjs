@@ -14,6 +14,7 @@ import {
   probeHealth,
   resolveRepoRoot,
   resolveSelectPort,
+  resolveSelectMediaUrl,
   resolveSelection,
   runPublish,
   runStatus,
@@ -196,10 +197,20 @@ test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every 
   // A failed thumbnail must be retried. antd Image keeps the error, while the large preview is a new request.
   assert.match(html, /function RetryImage/);
   assert.match(html, /retry=/);
-  assert.match(html, /preview=\{\{ src \}\}/);
+  assert.match(html, /preview=\{\{ src: base \}\}/);
+  assert.match(html, /\/media\?u=/);
   assert.match(html, /serverOrigin\+'\/feedback'/);
   assert.match(html, /"runId":"run-a"/);
   assert.match(html, /"curationRevision":"curation-a"/);
+});
+
+test('select media proxy accepts only https Twitter image hosts', () => {
+  const ok = 'https://pbs.twimg.com/media/HTQRvZZWwAEXfS8.jpg';
+  assert.equal(resolveSelectMediaUrl(ok), ok);
+  assert.equal(resolveSelectMediaUrl('https://video.twimg.com/ext_tw_video_thumb/1/img/a.jpg'), 'https://video.twimg.com/ext_tw_video_thumb/1/img/a.jpg');
+  assert.equal(resolveSelectMediaUrl('http://pbs.twimg.com/media/a.jpg'), null);
+  assert.equal(resolveSelectMediaUrl('https://evil.example/a.jpg'), null);
+  assert.equal(resolveSelectMediaUrl('https://user:pass@pbs.twimg.com/media/a.jpg'), null);
 });
 
 test('resolveSelectPort honors DAILY_NEWS_SELECT_PORT, falls back to the default, and validates', () => {

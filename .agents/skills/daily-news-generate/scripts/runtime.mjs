@@ -489,19 +489,31 @@ function RootApp() {
   );
 }
 
+function mediaSrc(src) {
+  // Helium cannot load pbs.twimg.com directly on this network. The select server can.
+  // Preview must use the same proxied URL, or the large image fails the same way.
+  try {
+    const host = new URL(src).hostname;
+    if (host === 'pbs.twimg.com' || host === 'video.twimg.com') {
+      return DATA.serverOrigin + '/media?u=' + encodeURIComponent(src);
+    }
+  } catch (e) {}
+  return src;
+}
+
 function RetryImage({ src, alt }) {
   // A failed thumbnail stays blank: antd Image records the error and does not retry.
-  // The large preview is a new request, so it can succeed after the thumbnail failed.
   // Remount on each attempt so that recorded error does not hide a later success.
   const [attempt, setAttempt] = useState(0);
-  const displaySrc = attempt === 0 ? src : src + (src.indexOf('?') === -1 ? '?' : '&') + 'retry=' + attempt;
+  const base = mediaSrc(src);
+  const displaySrc = attempt === 0 ? base : base + (base.indexOf('?') === -1 ? '?' : '&') + 'retry=' + attempt;
   return (
     <Image
       key={displaySrc}
       width={96}
       height={96}
       src={displaySrc}
-      preview={{ src }}
+      preview={{ src: base }}
       alt={alt}
       style={{ objectFit: 'cover', borderRadius: 6 }}
       referrerPolicy="no-referrer"
@@ -1050,6 +1062,67 @@ function readRequestBody(req) {
   });
 }
 
+const SELECT_MEDIA_HOSTS = new Set(['pbs.twimg.com', 'video.twimg.com']);
+const SELECT_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+
+export function resolveSelectMediaUrl(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2000) return null;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+  if (!SELECT_MEDIA_HOSTS.has(parsed.hostname)) return null;
+  return parsed.toString();
+}
+
+async function proxySelectMedia(target, res) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
+  try {
+    const upstream = await fetch(target, {
+      redirect: 'manual',
+      signal: ac.signal,
+      headers: { Accept: 'image/*' },
+    });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('media redirect refused');
+      return;
+    }
+    if (!upstream.ok) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('media upstream failed');
+      return;
+    }
+    const type = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!type.startsWith('image/')) {
+      res.writeHead(415, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('media is not an image');
+      return;
+    }
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (buf.length > SELECT_MEDIA_MAX_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('media too large');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': type,
+      'Content-Length': buf.length,
+      'Cache-Control': 'private, max-age=3600',
+    });
+    res.end(buf);
+  } catch (error) {
+    res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function resolveSelectPort(env = process.env) {
   const raw = env.DAILY_NEWS_SELECT_PORT;
   const port = raw === undefined || raw === null || raw === '' ? DEFAULT_SELECT_PORT : Number(raw);
@@ -1221,6 +1294,16 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
         if (req.method === 'GET' && url.pathname === '/health') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (req.method === 'GET' && url.pathname === '/media') {
+          const target = resolveSelectMediaUrl(url.searchParams.get('u') || '');
+          if (!target) {
+            res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('invalid media url');
+            return;
+          }
+          await proxySelectMedia(target, res);
           return;
         }
         if (req.method === 'GET' && url.pathname === '/decision') {
