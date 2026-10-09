@@ -2459,6 +2459,82 @@ function isForbiddenFetchError(error: unknown): boolean {
   return /returned error:\s*403\b|\bHTTP 403\b|\b403 Forbidden\b/i.test(summarizeError(error));
 }
 
+const GITHUB_PROFILE_RESERVED = new Set([
+  'about',
+  'account',
+  'apps',
+  'collections',
+  'customer-stories',
+  'enterprise',
+  'events',
+  'explore',
+  'features',
+  'login',
+  'marketplace',
+  'new',
+  'notifications',
+  'orgs',
+  'pricing',
+  'search',
+  'security',
+  'settings',
+  'signup',
+  'sponsors',
+  'team',
+  'topics',
+]);
+
+function cleanLinkedText(value: string): string {
+  return decodeHtml(stripHtml(value)).replace(/\s+/g, ' ').trim();
+}
+
+// GitHub org pages put the useful fact in each repo description. Generic HTML
+// extraction keeps the nav chrome and cuts the list, so a one-line roundup blurb
+// becomes the only readable claim.
+export function extractGitHubProfileLinkedSource(
+  html: string,
+  url: string,
+): { title?: string; description?: string; excerpt: string } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (normalizeDomain(parsed.hostname) !== 'github.com') return null;
+  const parts = parsed.pathname.split('/').filter(Boolean);
+  if (parts.length !== 1 || GITHUB_PROFILE_RESERVED.has(parts[0].toLowerCase())) return null;
+
+  const repos = new Map<string, string>();
+  const add = (name: string, description: string) => {
+    const repo = cleanLinkedText(name);
+    const text = cleanLinkedText(description);
+    if (!repo || !text || repos.has(repo)) return;
+    repos.set(repo, text);
+  };
+
+  const pinnedRe =
+    /<a\b[^>]*href=["']\/[^/"']+\/([^"']+)["'][^>]*>[\s\S]{0,500}?<span class=["']repo["']>([\s\S]*?)<\/span>[\s\S]{0,900}?<p class=["']pinned-item-desc[^"']*["'][^>]*>([\s\S]*?)<\/p>/gi;
+  for (const match of html.matchAll(pinnedRe)) add(match[2] || match[1], match[3]);
+
+  const listRe =
+    /<a\b[^>]*itemprop=["']name codeRepository["'][^>]*href=["']\/[^/"']+\/([^"']+)["'][^>]*>[\s\S]{0,200}?<\/a>[\s\S]{0,1500}?<p\b[^>]*itemprop=["']description["'][^>]*>([\s\S]*?)<\/p>/gi;
+  for (const match of html.matchAll(listRe)) add(match[1], match[2]);
+
+  if (repos.size === 0) return null;
+  const excerpt = [...repos.entries()]
+    .map(([name, description]) => `${name}: ${description}`)
+    .join('\n')
+    .slice(0, 1500);
+  return {
+    title: extractMetaTag(html, 'property', 'og:title') ?? parts[0],
+    description:
+      extractMetaTag(html, 'name', 'description') ??
+      extractMetaTag(html, 'property', 'og:description'),
+    excerpt,
+  };
+}
+
 export function officialBlogFetchWarning(url: string, error: unknown): string | null {
   if (!isOfficialBlogUrl(url) || !isForbiddenFetchError(error)) return null;
   return `官方博文抓取失败（403） ${url}：策展时请直接打开原文`;
@@ -2519,14 +2595,18 @@ async function fetchLinkedPage(
     ? extractMetaTag(trimmed, 'name', 'description') ??
       extractMetaTag(trimmed, 'property', 'og:description')
     : undefined;
-  const excerpt = (isHtml ? extractMainText(trimmed) : trimmed.replace(/\s+/g, ' ').trim()).slice(0, 1500);
+  const githubProfile = isHtml ? extractGitHubProfileLinkedSource(trimmed, normalizedUrl) : null;
+  const excerpt = githubProfile?.excerpt
+    ?? (isHtml ? extractMainText(trimmed) : trimmed.replace(/\s+/g, ' ').trim()).slice(0, 1500);
+  const resolvedTitle = githubProfile?.title ?? title;
+  const resolvedDescription = githubProfile?.description ?? description;
 
-  if (!title && !description && excerpt.length < 80) return null;
+  if (!resolvedTitle && !resolvedDescription && excerpt.length < 80) return null;
 
   return {
     url: normalizedUrl,
-    title,
-    description,
+    title: resolvedTitle,
+    description: resolvedDescription,
     excerpt,
     domain: normalizeDomain(parsedUrl.hostname),
     via: 'tweet',

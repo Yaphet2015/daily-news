@@ -3224,3 +3224,29 @@ test('collectAihotItems respects sinceTime and maxItems', async () => {
   assert.equal(capped.length, 2);
   assert.deepEqual(capped.map((i) => i.id), ['a', 'b']);
 });
+
+test('GitHub org pages expose repo descriptions instead of site chrome', () => {
+  const html = `
+    <html><head>
+      <meta property="og:site_name" content="GitHub">
+      <meta property="og:title" content="ArtCraft">
+      <meta name="description" content="ArtCraft has 41 repositories available.">
+    </head><body>
+      <a href="/storytold/photocraft"><span class="repo">photocraft</span></a>
+      <p class="pinned-item-desc">An open-source, clean-room reimplementation of Adobe Photoshop in pure Rust</p>
+      <a href="/storytold/filmcraft"><span class="repo">filmcraft</span></a>
+      <p class="pinned-item-desc">An open-source, clean-room reimplementation of Adobe Premiere Pro built in pure Rust.</p>
+      <a itemprop="name codeRepository" href="/storytold/vectorcraft">vectorcraft</a>
+      <p itemprop="description">An open-source, clean-room reimplementation of Adobe Illustrator, built in pure Rust.</p>
+      <nav>Sponsoring Repositories Select language</nav>
+    </body></html>`;
+
+  const source = collectModule.extractGitHubProfileLinkedSource(html, 'https://github.com/storytold');
+
+  assert.equal(source?.title, 'ArtCraft');
+  assert.match(source?.excerpt ?? '', /photocraft: An open-source, clean-room reimplementation of Adobe Photoshop/);
+  assert.match(source?.excerpt ?? '', /filmcraft: An open-source, clean-room reimplementation of Adobe Premiere Pro/);
+  assert.match(source?.excerpt ?? '', /vectorcraft: An open-source, clean-room reimplementation of Adobe Illustrator/);
+  assert.doesNotMatch(source?.excerpt ?? '', /Sponsoring|Select language/);
+  assert.equal(collectModule.extractGitHubProfileLinkedSource(html, 'https://github.com/storytold/photocraft'), null);
+});
