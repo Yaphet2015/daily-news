@@ -117,6 +117,9 @@ export async function applyFeedbackAdjustment(
   if (signalEntries.length) {
     const directions = new Set(evidence.map((event) => event.direction));
     const runIds = new Set(evidence.map((event) => event.runId));
+    if (evidence.some((event) => event.direction === 'remark')) {
+      throw new Error('Ranking Signal adjustment needs score-direction events');
+    }
     if (evidence.length < 3 || directions.size !== 1 || runIds.size < 2) {
       throw new Error('Ranking Signal adjustment needs 3 same-direction events across 2 runs');
     }

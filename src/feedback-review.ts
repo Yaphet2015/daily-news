@@ -14,7 +14,6 @@ import type {
   FeedbackReview,
   FeedbackReviewItem,
   RankingArtifact,
-  ScoreFeedbackDirection,
   ScoreFeedbackHistoryEvent,
   SelectionDecision,
 } from './types.js';
@@ -164,10 +163,9 @@ export function buildFeedbackReview(input: FeedbackReviewInput): FeedbackReview 
 export function buildScoreFeedbackHistoryEvents(input: FeedbackReviewInput): ScoreFeedbackHistoryEvent[] {
   const review = buildFeedbackReview(input);
   if (!review) return [];
-  // History records score-direction events only; remark-only entries stay in the review.
+  // A remark with no score button is still evidence. Direction stays undefined on the review item.
   return review.items
-    .filter((item): item is FeedbackReviewItem & { direction: ScoreFeedbackDirection } =>
-      item.direction !== undefined)
+    .filter((item) => item.direction !== undefined || Boolean(item.remark?.trim()))
     .map((item) => ({
       schemaVersion: 1,
       runId: review.runId,
@@ -179,7 +177,7 @@ export function buildScoreFeedbackHistoryEvents(input: FeedbackReviewInput): Sco
       selectionDecisionRevision: review.selectionDecisionRevision,
       policyRevision: review.policyRevision,
       itemId: item.id,
-      direction: item.direction,
+      direction: item.direction ?? 'remark',
       updatedAt: item.updatedAt,
       ...(item.remark ? { remark: item.remark } : {}),
       textPreview: item.textPreview,

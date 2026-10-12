@@ -35,19 +35,21 @@ test('feedback review contains content attribution evidence', () => {
   assert.equal(buildFeedbackReview({ ranking, curation, decision: { ...decision, scoreFeedbackById: {} } }), null);
 });
 
-test('remark-only items surface in review but never in score feedback history', () => {
+test('remark-only items stay unscored in review and enter history as remark evidence', () => {
   const remarkOnly: SelectionDecision = { ...decision, scoreFeedbackById: {},
     remarkById: { a: { text: '引用链接没解析出来', updatedAt: '2026-08-27T09:30:00Z' } } };
   const review = buildFeedbackReview({ ranking, curation, decision: remarkOnly });
   assert.equal(review?.items.length, 1);
   assert.equal(review?.items[0].remark, '引用链接没解析出来');
   assert.equal(review?.items[0].direction, undefined);
-  // round-trip through the strict decoder keeps the remark and optional direction valid
   const decoded = decodeFeedbackReview(JSON.parse(JSON.stringify(review)));
   assert.equal(decoded.items[0].remark, '引用链接没解析出来');
   assert.equal(decoded.items[0].direction, undefined);
-  // remarks are human notes, not score-direction events: history must stay empty
-  assert.deepEqual(buildScoreFeedbackHistoryEvents({ ranking, curation, decision: remarkOnly }), []);
+  const events = buildScoreFeedbackHistoryEvents({ ranking, curation, decision: remarkOnly });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].direction, 'remark');
+  assert.equal(events[0].remark, '引用链接没解析出来');
+  assert.equal(events[0].feedbackEventId, review?.items[0].feedbackEventId);
 });
 
 test('remark attaches to a direction item and rides along in its history event', () => {

@@ -82,6 +82,7 @@ Write progress to `output/<date>-curate-output.partial.json`. Do **not** write `
 | `collectionWarnings` has `官方博文抓取失败（403）`, or links to openai.com / anthropic.com (incl. subdomains) | Open that URL and write from the page. Other 403s: drop or stay on the card. |
 | `kind: substack_roundup_entry` or `sourceResolution.reason` is `roundup_destination` / missing | `url` is the source. Open the destination before writing institutional news. |
 | `sourceResolution.reason` is `quote_wrapper` / `embedded_quote_wrapper` | `author` is the quoted account. Summarize `linkedSource`. Wrapper text is commentary only. |
+| `sourceResolution.reason` is `quoted_tweet` | The quoted tweet is the source. `url` is that tweet. Summarize `linkedSource`, not the wrapper. |
 
 ### 4. curate-apply
 
@@ -107,7 +108,7 @@ After `status` says publish: `publish`, then `select-stop`.
 If publish prints `本期无评分反馈和备注`, stop. Else read `output/<date>-feedback-review.json`.
 
 1. Scoring remarks ("down-weight this author/topic") — treat like button feedback. Attribute to the **smallest content Tag** or Ranking Signal. Do not default to author/domain.
-2. Collection/parse remarks — bug report, not a preference. Do not touch scoring. Investigate collect / linked-source / curate-input. Propose a fix. No transient known-issues list.
+2. Collection/parse remarks — bug report, not a preference. Do not touch scoring. Investigate collect / linked-source / curate-input and fix that code. No transient known-issues list. A remark with no score button is still evidence: history stores `direction: "remark"`, and `feedback-apply` accepts it for `no_change` or for one matched Tag change of at most 2 points. Do not change a Ranking Signal from a remark.
 3. Prefer one existing matched Tag. If too broad, one controlled `custom:*` Tag.
 4. One event: at most one Tag, at most 2 points. Never adjust a Ranking Signal from one event.
 5. A global Ranking Signal needs 3 same-direction events across at least 2 runs.

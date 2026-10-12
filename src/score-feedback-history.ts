@@ -24,7 +24,12 @@ function decodeRevision(value: unknown, path: string, minimum: number): number {
 export function decodeScoreFeedbackHistoryEvent(value: unknown): ScoreFeedbackHistoryEvent {
   const raw = decodeObject(value, 'score feedback history event');
   const identity = decodeArtifactIdentity(raw, 'score feedback history event');
-  if (raw.direction !== 'too_high' && raw.direction !== 'too_low') throw new Error('feedback history direction is invalid');
+  if (raw.direction !== 'too_high' && raw.direction !== 'too_low' && raw.direction !== 'remark') {
+    throw new Error('feedback history direction is invalid');
+  }
+  if (raw.direction === 'remark' && (typeof raw.remark !== 'string' || raw.remark.trim().length === 0)) {
+    throw new Error('remark feedback history needs a remark');
+  }
   return {
     ...identity,
     feedbackEventId: decodeNonEmptyString(raw.feedbackEventId, 'feedbackEventId'),

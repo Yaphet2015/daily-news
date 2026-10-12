@@ -1682,6 +1682,33 @@ test('resolveTwitterPrimarySource resolves the quoted article from embedded quot
   assert.equal(resolved.author.username, 'jonasgeiping');
 });
 
+test('resolveTwitterPrimarySource uses the quoted tweet when it has no further article', async () => {
+  const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
+  const resolved = await resolveTwitterPrimarySource({
+    id: 'tw',
+    source: 'twitter',
+    text: 'Karpathy just posted the four-layer gap.',
+    publishedAt: '2026-10-12T00:00:00Z',
+    url: 'https://x.com/yanhua1010/status/2109435938254573957',
+    originUrl: 'https://x.com/yanhua1010/status/2109435938254573957',
+    author: { name: 'Yanhua', username: 'yanhua1010' },
+    media: [],
+    outboundLinks: [],
+    quotedStatusUrl: 'https://x.com/karpathy/status/2109361546505966046',
+    quotedTweetText: 'Dusting off this tweet from April because this gap is widening.',
+  }, {
+    resolveShortUrl: async () => null,
+    fetchLinkedPage: async () => null,
+    fetchQuotedPrimarySource: async () => null,
+    fetchTwitterReplies: async () => { throw new Error('should not fetch replies'); },
+  });
+
+  assert.equal(resolved.url, 'https://x.com/karpathy/status/2109361546505966046');
+  assert.equal(resolved.author.username, 'karpathy');
+  assert.equal(resolved.linkedSource?.excerpt, 'Dusting off this tweet from April because this gap is widening.');
+  assert.deepEqual(resolved.sourceResolution, { decision: 'use_linked_source', reason: 'quoted_tweet' });
+});
+
 test('resolveTwitterPrimarySource falls back to the network quote lookup when embedded quote text has no link', async () => {
   const resolveTwitterPrimarySource = (collectModule as Record<string, Function>).resolveTwitterPrimarySource;
   let networkCalled = false;

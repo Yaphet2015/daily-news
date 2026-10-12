@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-14T06:26:02.048Z",
+  "updatedAt": "2026-10-12T08:28:18.254Z",
   "authorRules": {},
   "domainRules": {},
   "positiveTopicHints": [],
@@ -22,7 +22,8 @@
     "adj-2026-09-07-meta-muse-agent",
     "adj-2026-09-08-imessage-chatgpt-agent",
     "adj-2026-09-10-no-change-armin-astra-too-low",
-    "adj-2026-09-14-concept-explainer"
+    "adj-2026-09-14-concept-explainer",
+    "adj-2026-10-12-no-change-karpathy-quote-unresolved"
   ],
   "customTags": [
     {
@@ -155,6 +156,15 @@
       "attribution": "马博 KV Cache 长文（too_low + 备注「喜欢把知识点拆开的深度讲解」）是本期唯一评分事件。先前误绑 custom:kv-cache-prefill-explainer，已撤回：备注针对的是深入浅出的讲解体裁，不是 KV/prefill 主题。现有匹配 Tag 只有 topic:ai-infra，过宽。format:tutorial 未命中（中文讲解没有 tutorial/guide/how to）。单次事件不能改 Ranking Signal，也不能改作者/域名。因此新增 custom:concept-explainer（关键词：讲得非常清楚 / 深入浅出 / 讲清 / clearly explained），权重 0→+2，只抬把概念拆开讲的讲解文。",
       "outcome": "applied",
       "recordedAt": "2026-09-14T06:26:02.048Z"
+    },
+    {
+      "adjustmentId": "adj-2026-10-12-no-change-karpathy-quote-unresolved",
+      "feedbackEventIds": [
+        "0e0b4d493d864cee683b5f8b21edc209c0c7845f5e4a7e09a933866e35cd2050"
+      ],
+      "attribution": "yanhua1010 这条备注说引用没有解析成 Andrej Karpathy 的推文。采集里 quotedStatusUrl 是 https://x.com/karpathy/status/2109361546505966046，但 sourceResolution 仍是 keep_origin/no_linked_source。嵌入的引用文本没有外链，解析器只在引用里找文章链接，找不到就把包装推文留作主源。这是引用解析故障，不是降权。该条没有评分方向。topic:agents 与 quality:evidence-rich 过宽。单次事件不能改 Ranking Signal。因此不改评分。",
+      "outcome": "no_change",
+      "recordedAt": "2026-10-12T08:28:18.254Z"
     }
   ]
 }

@@ -275,6 +275,8 @@ export interface CurationArtifact extends ArtifactIdentity<1> {
 }
 
 export type ScoreFeedbackDirection = 'too_high' | 'too_low';
+/** Score buttons, or a remark with no score button. */
+export type FeedbackHistoryDirection = ScoreFeedbackDirection | 'remark';
 
 export interface ScoreFeedbackEntry {
   direction: ScoreFeedbackDirection;
@@ -343,8 +345,9 @@ export interface ScoreFeedbackHistoryEvent extends ArtifactIdentity<1> {
   selectionDecisionRevision: number;
   policyRevision: number;
   itemId: string;
-  direction: ScoreFeedbackDirection;
+  direction: FeedbackHistoryDirection;
   updatedAt: string;
+  /** Required when direction is remark. */
   remark?: string;
   textPreview: string;
   contentTags: ContentTagId[];

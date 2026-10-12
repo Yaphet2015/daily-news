@@ -63,6 +63,29 @@ test('single feedback cannot spread one direction across multiple tags', async (
     review, history, normalizeConfirmedPreferenceRules(null), { writePolicy: async () => {} }), /one Tag/);
 });
 
+test('remark without a score can record no_change and can move one matched tag', async () => {
+  const remarkEvent: ScoreFeedbackHistoryEvent = { ...history[0], feedbackEventId: 'event-remark',
+    direction: 'remark', remark: '这个主题应降权' };
+  const remarkReview: FeedbackReview = { ...review, items: [{ ...review.items[0],
+    feedbackEventId: 'event-remark', direction: undefined, remark: '这个主题应降权' }] };
+  let written: ConfirmedPreferenceRules | undefined;
+  const current = normalizeConfirmedPreferenceRules(null);
+  const recorded = await applyFeedbackAdjustment({ schemaVersion: 1, adjustmentId: 'remark-none',
+    reviewRunId: 'run-a', basePolicyRevision: 1, feedbackEventIds: ['event-remark'], outcome: 'no_change',
+    attribution: 'parse bug, not a score', tagWeightOverrides: {} }, remarkReview, [remarkEvent], current,
+    { writePolicy: async (policy) => { written = policy; } });
+  assert.equal(recorded.status, 'no-change-recorded');
+  assert.equal(written?.policyRevision, 1);
+  written = undefined;
+  const applied = await applyFeedbackAdjustment({ schemaVersion: 1, adjustmentId: 'remark-tag',
+    reviewRunId: 'run-a', basePolicyRevision: 1, feedbackEventIds: ['event-remark'], outcome: 'applied',
+    attribution: 'remark asked to down-weight this topic', tagWeightOverrides: { 'topic:agents': -2 } },
+    remarkReview, [remarkEvent], current, { writePolicy: async (policy) => { written = policy; } });
+  assert.equal(applied.status, 'applied');
+  assert.equal(written?.policyRevision, 2);
+  assert.equal(written?.tagWeightOverrides?.['topic:agents'], -2);
+});
+
 test('no_change records evidence without incrementing policy revision', async () => {
   let written: ConfirmedPreferenceRules | undefined;
   const result = await applyFeedbackAdjustment({ schemaVersion: 1, adjustmentId: 'adjust-none',

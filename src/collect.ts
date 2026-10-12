@@ -2314,6 +2314,34 @@ function applyQuotedArticleAuthor(item: CollectedItem): CollectedItem {
   return { ...item, author };
 }
 
+function quotedTweetPrimarySource(
+  item: CollectedItem,
+  quoted?: { url: string; text: string; title?: string },
+): CollectedItem {
+  const url = quoted?.url ?? item.quotedStatusUrl!;
+  const text = (quoted?.text ?? item.quotedTweetText ?? '').trim();
+  const username = authorFromQuotedStatusUrl(url, item.author)?.username;
+  const title = quoted?.title?.trim() || (username ? `@${username}` : undefined);
+  return applyQuotedArticleAuthor({
+    ...item,
+    url,
+    sourceLabel: title ?? 'x.com',
+    linkedSource: {
+      url,
+      ...(title ? { title } : {}),
+      excerpt: text,
+      domain: 'x.com',
+      via: 'quote',
+    },
+    replyContext: [],
+    sourceResolution: { decision: 'use_linked_source', reason: 'quoted_tweet' },
+  });
+}
+
+function isQuotedTweetSource(source: { url: string; domain?: string }): boolean {
+  return source.domain === 'x.com' && /\/status\//.test(source.url);
+}
+
 async function enrichTwitterTextCandidates(
   item: Pick<CollectedItem, 'text' | 'url' | 'originUrl' | 'outboundLinks' | 'embeddedLinkedSource' | 'quotedStatusUrl'>,
   resolveShortUrlImpl: (url: string) => Promise<string | null>,
@@ -2781,7 +2809,15 @@ async function fetchQuotedPrimarySource(
     if (linkedSource) return { ...linkedSource, via: 'quote' };
   }
 
-  return null;
+  const quotedText = quotedTweet.text?.trim();
+  if (!quotedText) return null;
+  return {
+    url: buildTweetUrl(quotedTweet.author.screenName, quotedTweet.id),
+    title: quotedTweet.author.name?.trim() || `@${quotedTweet.author.screenName}`,
+    excerpt: quotedText,
+    domain: 'x.com',
+    via: 'quote',
+  };
 }
 
 async function fetchPublicSubstackPublications(): Promise<
@@ -3136,6 +3172,13 @@ export async function resolveTwitterPrimarySource(
 
   if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl && !enrichmentBreaker?.shouldSkip()) {
     const quotedPrimarySource = await fetchQuotedPrimarySourceImpl(enrichedItem.quotedStatusUrl);
+    if (quotedPrimarySource && isQuotedTweetSource(quotedPrimarySource)) {
+      return quotedTweetPrimarySource(enrichedItem, {
+        url: quotedPrimarySource.url,
+        text: quotedPrimarySource.excerpt ?? enrichedItem.quotedTweetText ?? '',
+        title: quotedPrimarySource.title,
+      });
+    }
     if (quotedPrimarySource) {
       return applyQuotedArticleAuthor({
         ...enrichedItem,
@@ -3146,6 +3189,10 @@ export async function resolveTwitterPrimarySource(
         sourceResolution: { decision: 'use_linked_source', reason: 'quote_wrapper' },
       });
     }
+  }
+
+  if (tweetLinks.length === 0 && enrichedItem.quotedStatusUrl && enrichedItem.quotedTweetText?.trim()) {
+    return quotedTweetPrimarySource(enrichedItem);
   }
 
   const shouldFetchReplyContext =
@@ -3209,6 +3256,13 @@ export async function resolveTwitterPrimarySource(
   if (!resolved.linkedSource) {
     if (enrichedItem.quotedStatusUrl && !enrichmentBreaker?.shouldSkip()) {
       const quotedPrimarySource = await fetchQuotedPrimarySourceImpl(enrichedItem.quotedStatusUrl);
+      if (quotedPrimarySource && isQuotedTweetSource(quotedPrimarySource)) {
+        return quotedTweetPrimarySource(enrichedItem, {
+          url: quotedPrimarySource.url,
+          text: quotedPrimarySource.excerpt ?? enrichedItem.quotedTweetText ?? '',
+          title: quotedPrimarySource.title,
+        });
+      }
       if (quotedPrimarySource) {
         return applyQuotedArticleAuthor({
           ...enrichedItem,
@@ -3219,6 +3273,9 @@ export async function resolveTwitterPrimarySource(
           sourceResolution: { decision: 'use_linked_source', reason: 'quote_wrapper' },
         });
       }
+    }
+    if (enrichedItem.quotedStatusUrl && enrichedItem.quotedTweetText?.trim()) {
+      return quotedTweetPrimarySource(enrichedItem);
     }
 
     if (enrichedItem.embeddedLinkedSource) {
