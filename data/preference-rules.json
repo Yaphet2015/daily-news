@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-12T08:28:18.254Z",
+  "updatedAt": "2026-10-14T03:06:37.031Z",
   "authorRules": {},
   "domainRules": {},
   "positiveTopicHints": [],
@@ -23,7 +23,8 @@
     "adj-2026-09-08-imessage-chatgpt-agent",
     "adj-2026-09-10-no-change-armin-astra-too-low",
     "adj-2026-09-14-concept-explainer",
-    "adj-2026-10-12-no-change-karpathy-quote-unresolved"
+    "adj-2026-10-12-no-change-karpathy-quote-unresolved",
+    "adj-2026-10-14-no-change-anatomy-id-mismatch"
   ],
   "customTags": [
     {
@@ -165,6 +166,15 @@
       "attribution": "yanhua1010 这条备注说引用没有解析成 Andrej Karpathy 的推文。采集里 quotedStatusUrl 是 https://x.com/karpathy/status/2109361546505966046，但 sourceResolution 仍是 keep_origin/no_linked_source。嵌入的引用文本没有外链，解析器只在引用里找文章链接，找不到就把包装推文留作主源。这是引用解析故障，不是降权。该条没有评分方向。topic:agents 与 quality:evidence-rich 过宽。单次事件不能改 Ranking Signal。因此不改评分。",
       "outcome": "no_change",
       "recordedAt": "2026-10-12T08:28:18.254Z"
+    },
+    {
+      "adjustmentId": "adj-2026-10-14-no-change-anatomy-id-mismatch",
+      "feedbackEventIds": [
+        "c4f004efb5332d47d09790b8915e80b83cb32f1e373cedbdf06736fc098179a3"
+      ],
+      "attribution": "这条备注没有评分按钮，说「引用链接取错了」。核对后，curate-input 里 my-feed-13 的主源就是 Sundrop，url 为 https://trysundrop.app/，reason 是 roundup_destination。Anatomy 的正确 id 是 my-feed-14，url 是 wheresryan22 的推文。策展时把 Anatomy 的标题和摘要写到了 my-feed-13 上，脚本又按 id 抄了 Sundrop 的 url，所以选刊卡片标题和链接对不上。这是策展抄错 id，不是采集或引用解析故障。该条未入选，已发布日报没有这条。没有评分方向。topic 与 quality 标签都未命中。单次备注不能改 Ranking Signal。因此不改评分。",
+      "outcome": "no_change",
+      "recordedAt": "2026-10-14T03:06:37.031Z"
     }
   ]
 }
