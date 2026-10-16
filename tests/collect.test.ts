@@ -316,6 +316,30 @@ test('parsePublicSubstackSubscriptions extracts followed publications from publi
   ]);
 });
 
+test('parsePublicSubstackSubscriptions reads profile subscriptions from script#preloads-json', () => {
+  const parsePublicSubstackSubscriptions = (collectModule as Record<string, Function>)
+    .parsePublicSubstackSubscriptions;
+
+  // Substack stopped inlining window._preloads = JSON.parse("...").
+  // The profile JSON now lives in script#preloads-json. Missing it fails the whole source,
+  // including configured publications such as Ben's Bites.
+  const html = [
+    '<script type="application/json" id="preloads-json">',
+    '{"profile":{"subscriptions":[{"publication":{"name":"Ben\'s Bites","subdomain":"bensbites","custom_domain":"www.bensbites.com"}}]}}',
+    '</script>',
+    '<script>window._preloads = JSON.parse(document.querySelector(\'script#preloads-json[type="application/json"]\').textContent)</script>',
+  ].join('');
+
+  assert.deepEqual(parsePublicSubstackSubscriptions(html), [
+    {
+      name: "Ben's Bites",
+      handle: 'bensbites',
+      slug: 'bensbites',
+      url: 'https://www.bensbites.com',
+    },
+  ]);
+});
+
 test('parseSubstackFeed extracts recent post metadata from RSS', () => {
   assert.equal(typeof (collectModule as Record<string, unknown>).parseSubstackFeed, 'function');
 

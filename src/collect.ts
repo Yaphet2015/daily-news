@@ -1103,15 +1103,23 @@ function deriveSubstackProfileHandle(publicationUrl: string): string {
   return match[1];
 }
 
+function extractSubstackPreloadsJson(html: string): string | undefined {
+  const legacy = html.match(/window\._preloads\s*=\s*JSON\.parse\("([\s\S]*?)"\)<\/script>/);
+  if (legacy?.[1]) return decodeEmbeddedJsonString(legacy[1]);
+
+  const embedded = html.match(/<script\b[^>]*\bid=["']preloads-json["'][^>]*>([\s\S]*?)<\/script>/i);
+  const text = embedded?.[1]?.trim();
+  return text || undefined;
+}
+
 export function parsePublicSubstackSubscriptions(
   html: string,
 ): Required<Pick<SubstackPublicationLike, 'name' | 'handle' | 'slug' | 'url'>>[] {
-  const preloadMatch = html.match(/window\._preloads\s*=\s*JSON\.parse\("([\s\S]*?)"\)<\/script>/);
-  if (!preloadMatch?.[1]) {
+  const decoded = extractSubstackPreloadsJson(html);
+  if (!decoded) {
     throw new Error('未找到 Substack profile 预加载数据');
   }
 
-  const decoded = decodeEmbeddedJsonString(preloadMatch[1]);
   const parsed = JSON.parse(decoded) as {
     profile?: {
       subscriptions?: Array<{
