@@ -8,7 +8,11 @@ import http from 'node:http';
 import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import {
   buildAgentRankingArtifact,
+  buildAgentPublishKeystrokeScript,
   buildSelectHtml,
+  buildSelectServerEnv,
+  detectAgentTerminal,
+  shouldNotifyPublishAgent,
   mergeForcedSelectItems,
   parseCliArgs,
   probeHealth,
@@ -187,6 +191,10 @@ test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every 
   assert.match(html, /recommendation feed skipped/);
   // The confirm button and a per-item checkbox must exist.
   assert.match(html, /id="confirm"/);
+  // Confirm must tell the agent to publish and close the page. The selection file is already the source of truth.
+  assert.match(html, /closeSelectPage/);
+  assert.match(html, /已通知终端执行发布/);
+  assert.match(html, /data\.notified/);
   // Selections persist in the browser across reloads/restarts (localStorage), so a restart never loses ticks.
   assert.match(html, /localStorage/);
   assert.match(html, /restoreSelection/);
@@ -202,6 +210,33 @@ test('buildSelectHtml embeds the date, the absolute confirm endpoint, and every 
   assert.match(html, /serverOrigin\+'\/feedback'/);
   assert.match(html, /"runId":"run-a"/);
   assert.match(html, /"curationRevision":"curation-a"/);
+});
+
+test('confirm notify types publish only into the detached agent terminal', () => {
+  // Intent: the confirm click must wake this agent, not a second session, and must not fire from tests or foreground select.
+  assert.equal(shouldNotifyPublishAgent({}), false);
+  assert.equal(shouldNotifyPublishAgent({
+    DAILY_NEWS_SELECT_DETACHED: '1',
+    DAILY_NEWS_AGENT_TERM: 'Ghostty',
+  }), true);
+  assert.equal(shouldNotifyPublishAgent({
+    DAILY_NEWS_SELECT_NOTIFY: '0',
+    DAILY_NEWS_SELECT_DETACHED: '1',
+    DAILY_NEWS_AGENT_TERM: 'Ghostty',
+  }), false);
+  assert.throws(() => buildAgentPublishKeystrokeScript('rm -rf /'), /unsupported terminal app/);
+  const script = buildAgentPublishKeystrokeScript('Ghostty');
+  assert.match(script, /keystroke "publish"/);
+  assert.match(script, /daily-news/);
+  assert.deepEqual(detectAgentTerminal(42, (pid) => {
+    if (pid === 42) return { ppid: 7, tty: 'ttys001', command: 'bangboo' };
+    if (pid === 7) return { ppid: 1, tty: '??', command: '/Applications/Ghostty.app/Contents/MacOS/ghostty' };
+    return null;
+  }), { app: 'Ghostty', tty: 'ttys001' });
+  const env = buildSelectServerEnv({ PATH: '/usr/bin' }, '/repo', { app: 'Ghostty', tty: 'ttys001' });
+  assert.equal(env.DAILY_NEWS_SELECT_DETACHED, '1');
+  assert.equal(env.DAILY_NEWS_AGENT_TERM, 'Ghostty');
+  assert.equal(shouldNotifyPublishAgent(env), true);
 });
 
 test('select media proxy accepts only https Twitter image hosts', () => {

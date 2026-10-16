@@ -5,7 +5,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const DEFAULT_CURATE_POOL = 80;
 const DEFAULT_SELECT_TARGET_MIN = 6;
@@ -717,6 +718,10 @@ function SelectPage() {
     setConfirmedFeedback({ ...data.decision.scoreFeedbackById });
     setRemarks({ ...data.decision.remarkById });
   }
+  function closeSelectPage() {
+    try { window.open('', '_self'); } catch (e) { /* browser may block */ }
+    try { window.close(); } catch (e) { /* tab was not script-opened */ }
+  }
   async function confirmSelection() {
     if (count === 0) { message.error('未选择任何条目'); return; }
     setSubmitting(true);
@@ -735,8 +740,14 @@ function SelectPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
       setDone(true);
-      message.success('✓ 已保存 ' + data.count + ' 条选择，可以关闭页面并回到终端。');
       try { localStorage.removeItem(STORE_KEY); } catch (e) { /* best-effort cache */ }
+      if (data.notified) {
+        message.success('已保存，已通知终端执行发布。页面将关闭。');
+        closeSelectPage();
+      } else {
+        message.warning('已保存。没能通知终端，请回到终端输入 publish。');
+        setTimeout(closeSelectPage, 1600);
+      }
     } catch (err) {
       message.error('提交失败：' + err.message + '（服务器可能已关闭，请重新运行 select）');
     } finally {
@@ -754,7 +765,7 @@ function SelectPage() {
     <Layout style={{ minHeight: '100vh' }}>
       <Content className="select-page">
         <Title level={3} style={{ marginTop: 8 }}>AI 日刊选择 · {DATA.date}</Title>
-        <Paragraph type="secondary">勾选要发布的条目，建议选 {TARGET} 条，然后点「确认发布」。</Paragraph>
+        <Paragraph type="secondary">勾选要发布的条目，建议选 {TARGET} 条。点「确认发布」后会保存选择、通知终端执行发布，并关闭这个页面。</Paragraph>
         {DATA.collectionWarnings.length > 0 && (
           <Alert
             type="warning"
@@ -1213,6 +1224,127 @@ async function stopPid(pid) {
   return !isPidAlive(pid);
 }
 
+const execFileAsync = promisify(execFile);
+const PUBLISH_NOTIFY_APPS = new Set(['Ghostty', 'iTerm2', 'Terminal', 'Warp']);
+const SELECT_TAB_APPS = ['Helium', 'Google Chrome', 'Safari'];
+
+export function shouldNotifyPublishAgent(env = process.env) {
+  return env.DAILY_NEWS_SELECT_NOTIFY !== '0'
+    && env.DAILY_NEWS_SELECT_DETACHED === '1'
+    && PUBLISH_NOTIFY_APPS.has(env.DAILY_NEWS_AGENT_TERM || '');
+}
+
+export function buildAgentPublishKeystrokeScript(appName) {
+  if (!PUBLISH_NOTIFY_APPS.has(appName)) {
+    throw new Error(`unsupported terminal app: ${appName}`);
+  }
+  return [
+    `tell application "${appName}" to activate`,
+    'delay 0.4',
+    'tell application "System Events"',
+    `  tell process "${appName}"`,
+    '    set frontmost to true',
+    '    set matches to {}',
+    '    repeat with w in windows',
+    '      if (name of w as text) contains "daily-news" then set end of matches to w',
+    '    end repeat',
+    '    if (count of matches) is not 1 then error "expected exactly one daily-news window"',
+    '    try',
+    '      perform action "AXRaise" of item 1 of matches',
+    '    end try',
+    '  end tell',
+    '  keystroke "publish"',
+    '  key code 36',
+    'end tell',
+  ].join('\n');
+}
+
+function readProcessRow(pid) {
+  const out = execFileSyncPs(pid);
+  const match = out.match(/^(\d+)\s+(\S+)\s+(.+)$/);
+  if (!match) return null;
+  return { ppid: Number(match[1]), tty: match[2], command: match[3] };
+}
+
+function execFileSyncPs(pid) {
+  return execFileSync('ps', ['-p', String(pid), '-o', 'ppid=', '-o', 'tty=', '-o', 'comm='], {
+    encoding: 'utf8',
+  }).trim();
+}
+
+export function buildSelectServerEnv(env, repoRoot, terminal = detectAgentTerminal()) {
+  const childEnv = { ...env, DAILY_NEWS_REPO: repoRoot, DAILY_NEWS_SELECT_DETACHED: '1' };
+  if (terminal?.app) childEnv.DAILY_NEWS_AGENT_TERM = terminal.app;
+  if (terminal?.tty) childEnv.DAILY_NEWS_AGENT_TTY = terminal.tty;
+  return childEnv;
+}
+
+export function detectAgentTerminal(startPid = process.ppid, readRow = readProcessRow) {
+  let pid = startPid;
+  let app = null;
+  let tty = null;
+  for (let i = 0; i < 15 && pid > 1; i += 1) {
+    let row;
+    try {
+      row = readRow(pid);
+    } catch {
+      break;
+    }
+    if (!row) break;
+    if (!tty && row.tty && row.tty !== '??' && row.tty !== '-') tty = row.tty;
+    if (!app) {
+      if (/ghostty/i.test(row.command)) app = 'Ghostty';
+      else if (/iterm/i.test(row.command)) app = 'iTerm2';
+      else if (/(^|\/)Terminal$/i.test(row.command)) app = 'Terminal';
+      else if (/\bWarp\b|\/Warp$/i.test(row.command)) app = 'Warp';
+    }
+    if (app) break;
+    pid = row.ppid;
+  }
+  return app ? { app, tty } : null;
+}
+
+export function buildCloseSelectTabScript(appName, origin) {
+  if (!SELECT_TAB_APPS.includes(appName)) throw new Error(`unsupported browser: ${appName}`);
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new Error(`unsafe select origin: ${origin}`);
+  return [
+    `tell application "${appName}"`,
+    '  repeat with w in windows',
+    '    set doomed to {}',
+    '    repeat with t in tabs of w',
+    `      if (URL of t as text) contains "${origin}" then set end of doomed to t`,
+    '    end repeat',
+    '    repeat with t in doomed',
+    '      close t',
+    '    end repeat',
+    '  end repeat',
+    'end tell',
+  ].join('\n');
+}
+
+async function notifyAgentToPublish(env, log) {
+  if (!shouldNotifyPublishAgent(env)) return false;
+  const script = buildAgentPublishKeystrokeScript(env.DAILY_NEWS_AGENT_TERM);
+  await execFileAsync('osascript', ['-e', script], { timeout: 8000 });
+  log(`[daily-news-agent] notified agent to publish via ${env.DAILY_NEWS_AGENT_TERM}`);
+  return true;
+}
+
+async function closeSelectBrowserTabs(origin, log) {
+  if (process.env.DAILY_NEWS_SELECT_CLOSE_TAB === '0') return;
+  for (const appName of SELECT_TAB_APPS) {
+    try {
+      await execFileAsync('osascript', ['-e', buildCloseSelectTabScript(appName, origin)], { timeout: 8000 });
+      log(`[daily-news-agent] closed select tab in ${appName}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/not running|不能获得|Can’t get|Application isn’t running|-1728|-600/i.test(message)) {
+        log(`[daily-news-agent] close select tab skipped for ${appName}: ${message.split('\n')[0]}`);
+      }
+    }
+  }
+}
+
 function openInBrowser(url, log) {
   // The select server opens the page itself on listen; disable for headless/CI/testing.
   if (process.env.DAILY_NEWS_SELECT_OPEN_BROWSER === '0') {
@@ -1397,12 +1529,20 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
             const selected = pipeline.selectionDecisionModule.resolveSelectedItems(decision, curation);
             await writeJson(selectionPath, { date, selectedItems: selected });
             log(`[daily-news-agent] selection saved: ${selected.length} items → ${decisionPath}`);
+            let notified = false;
+            try {
+              notified = await notifyAgentToPublish(env, log);
+            } catch (error) {
+              log(`[daily-news-agent] publish notify failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+            }
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true, count: selected.length, path: decisionPath, decision }));
+            res.end(JSON.stringify({ ok: true, count: selected.length, path: decisionPath, decision, notified }));
             setTimeout(() => {
-              server.close();
-              process.exit(0);
-            }, 200);
+              closeSelectBrowserTabs(origin, log).finally(() => {
+                server.close();
+                process.exit(0);
+              });
+            }, notified ? 400 : 2000);
             return;
           } catch (error) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1495,7 +1635,7 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
       'daily-news select-start: a select server is already running (reused).',
       `SELECT_URL=${origin}/`,
       `SELECTION_FILE=${decisionPath}`,
-      'Choose 6-10 items, add optional score feedback, and click 确认发布. The agent is NOT blocking.',
+      'Choose 6-10 items, add optional score feedback, and click 确认发布. The page notifies the agent and closes itself.',
     ].join('\n');
   }
 
@@ -1517,7 +1657,7 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
   const child = spawn(
     process.execPath,
     ['--import', tsxPath, runtimePath, ...selectArgs],
-    { cwd: repoRoot, env: { ...env, DAILY_NEWS_REPO: repoRoot }, detached: true, stdio: ['ignore', logFd, logFd] },
+    { cwd: repoRoot, env: buildSelectServerEnv(env, repoRoot), detached: true, stdio: ['ignore', logFd, logFd] },
   );
   child.unref();
   await writeFile(pidPath, String(child.pid));
@@ -1537,8 +1677,9 @@ async function runSelectStart({ pipeline, repoRoot, args, log, env = process.env
     `SELECTION_FILE=${decisionPath}`,
     `SERVER_PID_FILE=${pidPath}`,
     `SERVER_LOG=${logPath}`,
-    'The agent is NOT blocking. Tell the user to choose 6-10 items and click 确认发布, then to tell',
-    'you to publish. After publish, run `select-stop` to clean up the detached server.',
+    'The agent is NOT blocking. Tell the user to choose 6-10 items and click 确认发布.',
+    'That click saves the decision, types publish into this terminal, and closes the page.',
+    'Treat that publish message as the user request. After publish, run `select-stop`.',
   ].join('\n');
 }
 

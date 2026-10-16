@@ -91,6 +91,7 @@ Run `curate-apply`. Zero curated items or many rejections → usually a copied i
 ### 5. select-start
 
 Run `select-start`, tell the user to pick 6–10 items (optional 评分过高 / 评分过低, optional 备注), then **end the turn**.
+「确认发布」保存选择，向本终端输入 `publish`，并关闭页面。那条 `publish` 是用户的发布请求。仍要等 `status` 说 publish 再执行 `publish`。
 Do not operate the HTML. `selection-decision.json` is SSOT. Legacy `selection.json` is not publish input.
 
 ### 5b. Write the one-line description (before publish)
