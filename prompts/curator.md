@@ -59,6 +59,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - Do not invent facts that are not in the source. Careful inference is allowed, but it must stay anchored to the original post and context
 - Avoid formulaic phrasing. The summary should read like an editor who has done extra reporting on top of the source material, not a mechanical recap
 - Do not end a summary with a stock caveat that only names a missing collection, a single-person workflow, or an absent paper, protocol, or failure sample. Omit the missing part. Do not announce the omission
+- The summary is for a reader who already follows AI news. Do not define basic field terms. Do not write about the summary itself: no “text was truncated”, “this is not official guidance”, “details are only on the linked page”, or “the available text only confirms the scope”
 - Do not collapse a complex item into a single takeaway if the source contains meaningful tension, mixed evidence, or strategic subtext
 - Be selective with content that looks newsy but says very little. Quality matters more than filling space
 - Use `Product` for launches, feature updates, tooling, company moves, or research that primarily changes what people can use or buy now
