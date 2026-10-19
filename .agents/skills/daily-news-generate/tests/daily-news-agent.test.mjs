@@ -9,6 +9,7 @@ import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from 'und
 import {
   buildAgentRankingArtifact,
   buildAgentPublishKeystrokeScript,
+  buildGhosttyPublishScript,
   buildSelectHtml,
   buildSelectServerEnv,
   detectAgentTerminal,
@@ -225,9 +226,17 @@ test('confirm notify types publish only into the detached agent terminal', () =>
     DAILY_NEWS_AGENT_TERM: 'Ghostty',
   }), false);
   assert.throws(() => buildAgentPublishKeystrokeScript('rm -rf /'), /unsupported terminal app/);
-  const script = buildAgentPublishKeystrokeScript('Ghostty');
-  assert.match(script, /keystroke "publish"/);
-  assert.match(script, /daily-news/);
+  assert.throws(() => buildAgentPublishKeystrokeScript('Ghostty'), /buildGhosttyPublishScript/);
+  const script = buildGhosttyPublishScript('/Users/phaethon/workspace/personal/daily-news');
+  assert.match(script, /input text "publish" to targetTerm/);
+  assert.match(script, /send key "enter" to targetTerm/);
+  assert.match(script, /working directory of t as text/);
+  assert.match(script, /contains "bangboo"/);
+  assert.doesNotMatch(script, /daily-news window/);
+  assert.throws(() => buildGhosttyPublishScript('has\nnewline'), /unsafe AppleScript string/);
+  const iterm = buildAgentPublishKeystrokeScript('iTerm2');
+  assert.match(iterm, /keystroke "publish"/);
+  assert.match(iterm, /daily-news/);
   assert.deepEqual(detectAgentTerminal(42, (pid) => {
     if (pid === 42) return { ppid: 7, tty: 'ttys001', command: 'bangboo' };
     if (pid === 7) return { ppid: 1, tty: '??', command: '/Applications/Ghostty.app/Contents/MacOS/ghostty' };

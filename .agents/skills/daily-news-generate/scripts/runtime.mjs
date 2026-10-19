@@ -1234,9 +1234,50 @@ export function shouldNotifyPublishAgent(env = process.env) {
     && PUBLISH_NOTIFY_APPS.has(env.DAILY_NEWS_AGENT_TERM || '');
 }
 
+export function appleScriptString(value) {
+  if (typeof value !== 'string' || value.length === 0 || /[\r\n]/.test(value)) {
+    throw new Error('unsafe AppleScript string');
+  }
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+export function buildGhosttyPublishScript(repoRoot) {
+  const repo = appleScriptString(repoRoot);
+  // Ghostty's front window title is the active tab, so a title search misses this session
+  // whenever another tab is focused. Target the surface by working directory instead.
+  return [
+    'tell application "Ghostty"',
+    `  set repoPath to ${repo}`,
+    '  set cwdMatches to {}',
+    '  set agentMatches to {}',
+    '  repeat with t in terminals',
+    '    try',
+    '      if (working directory of t as text) is repoPath then',
+    '        set end of cwdMatches to t',
+    '        if (name of t as text) contains "bangboo" then set end of agentMatches to t',
+    '      end if',
+    '    end try',
+    '  end repeat',
+    '  if (count of agentMatches) is 1 then',
+    '    set targetTerm to item 1 of agentMatches',
+    '  else if (count of cwdMatches) is 1 then',
+    '    set targetTerm to item 1 of cwdMatches',
+    '  else',
+    '    error "expected one Ghostty terminal for repo " & repoPath & ", found cwd " & (count of cwdMatches) & " and bangboo " & (count of agentMatches)',
+    '  end if',
+    '  focus targetTerm',
+    '  input text "publish" to targetTerm',
+    '  send key "enter" to targetTerm',
+    'end tell',
+  ].join('\n');
+}
+
 export function buildAgentPublishKeystrokeScript(appName) {
   if (!PUBLISH_NOTIFY_APPS.has(appName)) {
     throw new Error(`unsupported terminal app: ${appName}`);
+  }
+  if (appName === 'Ghostty') {
+    throw new Error('Ghostty notify requires buildGhosttyPublishScript(repoRoot)');
   }
   return [
     `tell application "${appName}" to activate`,
@@ -1257,6 +1298,19 @@ export function buildAgentPublishKeystrokeScript(appName) {
     '  key code 36',
     'end tell',
   ].join('\n');
+}
+
+function buildPublishNotifyScript(env) {
+  if (env.DAILY_NEWS_AGENT_TERM === 'Ghostty') {
+    return buildGhosttyPublishScript(env.DAILY_NEWS_REPO);
+  }
+  return buildAgentPublishKeystrokeScript(env.DAILY_NEWS_AGENT_TERM);
+}
+
+function formatNotifyError(error) {
+  if (!(error instanceof Error)) return String(error);
+  const stderr = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+  return stderr || error.message;
 }
 
 function readProcessRow(pid) {
@@ -1324,7 +1378,7 @@ export function buildCloseSelectTabScript(appName, origin) {
 
 async function notifyAgentToPublish(env, log) {
   if (!shouldNotifyPublishAgent(env)) return false;
-  const script = buildAgentPublishKeystrokeScript(env.DAILY_NEWS_AGENT_TERM);
+  const script = buildPublishNotifyScript(env);
   await execFileAsync('osascript', ['-e', script], { timeout: 8000 });
   log(`[daily-news-agent] notified agent to publish via ${env.DAILY_NEWS_AGENT_TERM}`);
   return true;
@@ -1533,7 +1587,7 @@ async function runSelect({ pipeline, repoRoot, args, log, env = process.env }) {
             try {
               notified = await notifyAgentToPublish(env, log);
             } catch (error) {
-              log(`[daily-news-agent] publish notify failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+              log(`[daily-news-agent] publish notify failed: ${formatNotifyError(error).split('\n')[0]}`);
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true, count: selected.length, path: decisionPath, decision, notified }));
