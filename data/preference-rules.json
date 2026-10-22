@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-18T07:30:37.497Z",
+  "updatedAt": "2026-10-22T08:34:29.899Z",
   "authorRules": {},
   "domainRules": {},
   "positiveTopicHints": [],
@@ -25,7 +25,8 @@
     "adj-2026-09-14-concept-explainer",
     "adj-2026-10-12-no-change-karpathy-quote-unresolved",
     "adj-2026-10-14-no-change-anatomy-id-mismatch",
-    "adj-2026-10-18-no-change-summary-style-remark"
+    "adj-2026-10-18-no-change-summary-style-remark",
+    "adj-2026-10-22-no-change-title-must-name-product"
   ],
   "customTags": [
     {
@@ -185,6 +186,15 @@
       "attribution": "这条备注没有评分按钮。它要求摘要不要解释蒸馏这种基础词，也不要写“文本被截断”“不是官方指引”“详情去原文看”这类关于摘要本身的话。这是写法要求，不是要降低某个主题或作者。命中的 quality:evidence-rich 太宽，改它不会改变摘要写法。单次备注不能改 Ranking Signal。已从本期已发布摘要删掉那两句，并在 prompts/curator.md 加了对应规则。因此不改评分。",
       "outcome": "no_change",
       "recordedAt": "2026-10-18T07:30:37.497Z"
+    },
+    {
+      "adjustmentId": "adj-2026-10-22-no-change-title-must-name-product",
+      "feedbackEventIds": [
+        "3e4a2893352c76ea75cd513ae145aef49dbe489821a349edb2f50314db2f3ae2"
+      ],
+      "attribution": "这条备注没有评分按钮。它指出标题没有点名 Claude Duet。这是标题写法问题，不是要降低某个主题、作者或来源。条目命中的 topic:agents、format:research、quality:evidence-rich 都与标题是否含产品名无关，改任何 Tag 或 Ranking Signal 都不会让标题带上产品名。单条备注也不能改 Ranking Signal。已在 prompts/curator.md 补规则：标题必须用原名点名产品、公司或型号，15 到 30 字的计数只数汉字，英文名不占数也不得因此省略。因此不改评分。",
+      "outcome": "no_change",
+      "recordedAt": "2026-10-22T08:34:29.899Z"
     }
   ]
 }

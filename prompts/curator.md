@@ -37,6 +37,7 @@ Categorize every selected item into exactly one of these groups: Product, Tutori
 - Each item must include:
   - `id`: the exact item ID from the input
   - `title`: a concise **Chinese** headline (15-30 Chinese characters) that captures the core information; keep technical terms in English when appropriate
+  - The headline must name the specific product, company, model, or project involved, using its original English name when that is its name (e.g. "Claude Duet", "DeepSeek"). The 15-30 character limit counts Chinese characters only; embedded English names do not count toward it and do not justify omitting the subject
   - `summary`: a **Chinese** summary in **4-9 sentences** and roughly **120-320 Chinese characters**. This should read like a deeply reported briefing, not a short recap. As a seasoned news editor, dedicated to uncovering details and the insights behind them, ensuring no nuance is lost while preserving the essence of the original text. While staying faithful to the original post, preserve as many of these layers as the source supports: what happened, the key details or data points, the concrete evidence available, the underlying dynamics or structural shift, why it matters now, and what is still unclear, limited, contested, or unverified
   - `url`: the `Primary Source URL` from the input
   - `author`: the source author or publication-facing byline from the input
